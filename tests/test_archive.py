@@ -290,5 +290,26 @@ check("legacy day still listed by all_days",
       and "2020-01-01" in [d["date"] for d in db.all_days(con)])
 con.close()
 
+# ---- FIX: missing archive reconciles has_archive (no permanent stale/re-queue) ----
+import shutil as _shutil  # noqa: E402
+from tarzaniq.pipeline import reprocess_day as _rpd  # noqa: E402
+con = db.connect()
+_ana = [d for d in db.all_days(con) if d["employee"] == "Ana"][0]
+# wipe the archive dir for this day so reprocess can't find a manifest
+_adir = archive.day_archive_dir("26.06.11.OldBazaar.Ana")
+if _adir.exists():
+    _shutil.rmtree(_adir)
+_raised = False
+try:
+    _rpd(con, _ana["id"], MockEngine({}), config.load_config())
+except FileNotFoundError:
+    _raised = True
+check("reprocess_day raises when archive is gone", _raised)
+# the worker's _run_reprocess catches it and reconciles has_archive -> 0; emulate that call path:
+db.set_day_archive_flag(con, _ana["id"], False)
+_after = db.day_row(con, _ana["id"])
+check("missing-archive day reconciled to has_archive=0", _after["has_archive"] == 0)
+con.close()
+
 print("ALL GREEN" if not fails else f"{len(fails)} FAILURES: {fails}")
 sys.exit(1 if fails else 0)

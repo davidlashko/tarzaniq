@@ -160,6 +160,9 @@ check("committed day fp_components match current",
 rec = import_day(xlsx)
 check("import chunks parse", rec["stats"]["cold_persons"] == 5)
 check("import photos count", len(rec["photos"]) == 14)
+check("imported rec round-trips the fingerprint",
+      rec.get("processing_fingerprint") is not None
+      and isinstance(rec.get("fp_components"), dict))
 
 # ---------------------------------------------------------------- duplicate
 added2, _ = state.enqueue([str(FOLDER)])

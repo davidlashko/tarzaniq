@@ -17,6 +17,7 @@ the loop between photos.
 
 import base64
 import json
+import logging
 import queue as queue_mod
 import shutil
 import subprocess
@@ -443,6 +444,14 @@ class AppState:
                                    cancel_check=lambda: job.cancel,
                                    pause_wait=self.run_flag.wait)
         except FileNotFoundError as e:
+            # has_archive said 1 but the archive is gone: reconcile so the day
+            # becomes legacy (excluded) instead of re-queuing a doomed reprocess.
+            try:
+                db.set_day_archive_flag(con, job.day_id, False)
+            except Exception:
+                pass
+            logging.getLogger("tarzaniq.pipeline").warning(
+                "reprocess: archive missing for day %s: %s", job.day_id, e)
             job.status, job.message = "error", str(e)
             return
         if result is None:
@@ -643,7 +652,8 @@ def bring_current(state, con, enqueue_reprocess=True):
                 recompute_day(con, d["id"], params)
                 out["recomputed"] += 1
             except Exception:
-                pass
+                logging.getLogger("tarzaniq.pipeline").exception(
+                    "bring_current: recompute failed for day %s", d["id"])
         elif decision == "reprocess":
             reprocess_ids.append(d["id"])
         elif decision == "legacy":

@@ -128,8 +128,7 @@ def _migrate(con):
     if "has_archive" not in cols:
         con.execute("ALTER TABLE days ADD COLUMN has_archive INTEGER DEFAULT 0")
     for r in con.execute("SELECT id, source_folder, date, place, employee FROM days"):
-        from pathlib import Path as _P
-        folder = _P(r["source_folder"]).name if r["source_folder"] \
+        folder = Path(r["source_folder"]).name if r["source_folder"] \
             else f"{r['date']}.{r['place']}.{r['employee']}"
         con.execute("UPDATE days SET has_archive=? WHERE id=?",
                     (1 if _has_archive_for(folder) else 0, r["id"]))
@@ -280,6 +279,12 @@ def commit_day(con, day_record):
 def update_money(con, day_id, cash, card):
     con.execute("UPDATE days SET money_cash=?, money_card=? WHERE id=?",
                 (cash, card, day_id))
+    con.commit()
+
+
+def set_day_archive_flag(con, day_id, has_archive):
+    con.execute("UPDATE days SET has_archive=? WHERE id=?",
+                (1 if has_archive else 0, day_id))
     con.commit()
 
 
