@@ -99,5 +99,62 @@ got = list(archive.iter_archived(folder))
 check("iter yields 2 (path, entry)", len(got) == 2 and got[0][0].name == "DSC09998.jxl")
 check("read_manifest missing -> None", archive.read_manifest("99.99.99.Nope.Nobody") is None)
 
+# ---- ingest writes the archive (end to end via AppState + MockEngine) ----
+import time as _time  # noqa: E402
+from PIL import Image as _Image  # noqa: E402
+from tarzaniq import db  # noqa: E402
+from tarzaniq.engine import MockEngine  # noqa: E402
+from tarzaniq.pipeline import AppState  # noqa: E402
+
+ING = TMP / "ingest" / "26.06.11.OldBazaar.Ana"
+ING.mkdir(parents=True)
+ing_plan = [(1, [0]), (2, [0]), (3, [0])]  # 3 photos, one subject
+ing_manifest = {}
+for num, subs in ing_plan:
+    fn = f"DSC{num:04d}.JPG"
+    _Image.new("RGB", (320, 240), (num * 9 % 255, 100, 80)).save(ING / fn, "JPEG")
+    ing_manifest[fn] = {"subjects": subs, "extra": 0}
+
+st = AppState(engine_factory=lambda: MockEngine(ing_manifest))
+added, errs = st.enqueue([str(ING)])
+
+
+def _wait_prompt(ptype, timeout=20):
+    t0 = _time.time()
+    while _time.time() - t0 < timeout:
+        p = st.pending_prompt
+        if p and p["type"] == ptype:
+            return p
+        _time.sleep(0.05)
+    raise TimeoutError(ptype)
+
+
+def _wait_done(jid, timeout=30):
+    t0 = _time.time()
+    while _time.time() - t0 < timeout:
+        for j in st.jobs:
+            if j.id == jid and j.status in ("done", "error", "discarded", "skipped"):
+                return j
+        _time.sleep(0.05)
+    raise TimeoutError("job")
+
+
+p = _wait_prompt("money"); st.answer(p["id"], {})
+p = _wait_prompt("commit"); st.answer(p["id"], {"commit": True})
+job = _wait_done(added[0]["id"])
+check("ingest committed", job.status == "done", job.message)
+
+man2 = archive.read_manifest("26.06.11.OldBazaar.Ana")
+check("ingest wrote manifest", man2 is not None and man2["count"] == 3, str(man2))
+check("ingest preserved filenames + seq",
+      man2["photos"][0]["original_filename"] == "DSC0001.JPG"
+      and man2["photos"][0]["seq"] == 1)
+check("ingest entries have sha256 + jxl_bytes",
+      len(man2["photos"][0]["sha256"]) == 64 and man2["photos"][0]["jxl_bytes"] > 0)
+adir = archive.day_archive_dir("26.06.11.OldBazaar.Ana")
+check("jxl files on disk", (adir / "DSC0001.jxl").exists()
+      and (adir / "DSC0003.jxl").exists())
+check("archived jxl decodes", archive.decode_jxl(adir / "DSC0001.jxl").ndim == 3)
+
 print("ALL GREEN" if not fails else f"{len(fails)} FAILURES: {fails}")
 sys.exit(1 if fails else 0)

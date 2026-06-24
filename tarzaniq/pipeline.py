@@ -27,8 +27,9 @@ from datetime import datetime
 from pathlib import Path
 
 import cv2
+import numpy as np
 
-from . import APP_VERSION, config, db, naming, exifutil
+from . import APP_VERSION, config, db, naming, exifutil, archive
 from .engagements import Engager, analyze
 from .engine import FaceEngine, SubjectTracker, annotate_preview
 from .excelio import export_day
@@ -279,16 +280,43 @@ class AppState:
         decode_flag = (cv2.IMREAD_REDUCED_COLOR_2 if cfg.get("decode_reduced")
                        else cv2.IMREAD_COLOR)
 
+        do_archive = bool(cfg.get("archive_enabled", True))
+        arch_long = int(cfg.get("archive_long_edge", 1600))
+        arch_q = int(cfg.get("archive_quality", 80))
+        archive_entries = []
+
         for idx, rec in enumerate(scan):
             if job.cancel:
                 job.status, job.message = "discarded", "Cancelled"
                 return
             self.run_flag.wait()  # pause point
 
-            img = cv2.imread(str(rec["path"]), decode_flag)
+            raw = None
+            try:
+                raw = rec["path"].read_bytes()
+            except Exception:
+                raw = None
+            img = (cv2.imdecode(np.frombuffer(raw, np.uint8), decode_flag)
+                   if raw is not None else None)
             flags = []
             if rec["src"] in ("mtime", "none"):
                 flags.append("no_exif_time")
+
+            if do_archive and img is not None and raw is not None:
+                try:
+                    jxl = archive.encode_jxl(img, arch_long, arch_q)
+                    jxl_name = Path(rec["filename"]).stem + ".jxl"
+                    adir = archive.day_archive_dir(job.name)
+                    adir.mkdir(parents=True, exist_ok=True)
+                    (adir / jxl_name).write_bytes(jxl)
+                    archive_entries.append({
+                        "original_filename": rec["filename"], "seq": rec["seq"],
+                        "exif_time": rec["t"].strftime("%H:%M:%S.%f"),
+                        "exif_source": rec["src"], "sha256": archive.sha256_bytes(raw),
+                        "jxl_filename": jxl_name, "jxl_bytes": len(jxl)})
+                except Exception:
+                    flags.append("archive_failed")
+
             observations = []
             if img is None:
                 flags.append("decode_failed")
@@ -337,6 +365,19 @@ class AppState:
             elif idx % 25 == 0:
                 self.broadcast("status", {"job": job.brief(),
                                           "counts": engager.live_counts()})
+
+        if do_archive and archive_entries:
+            try:
+                archive.write_manifest(job.name, {
+                    "folder": job.name, "date": date_iso, "place": job.place,
+                    "employee": job.employee, "archive_long_edge": arch_long,
+                    "archive_target_kb": int(cfg.get("archive_target_kb", 150)),
+                    "archive_quality": arch_q, "app_version": APP_VERSION,
+                    "count": len(archive_entries),
+                    "archived_at": datetime.now().isoformat()},
+                    archive_entries)
+            except Exception:
+                pass
 
         # ---- wrap up analysis
         eng_final = engager.finalize()
