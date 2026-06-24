@@ -5,7 +5,7 @@ no photo re-scans, so even years of history render instantly.
 import json
 from collections import defaultdict
 
-from . import db, fingerprint
+from . import db, fingerprint, significance
 
 WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
             "Saturday", "Sunday"]
@@ -89,6 +89,7 @@ def employee_summaries(days):
             "cold_events": sum(s["cold_events"] for s in sts),
             "warm_persons": warm_p,
             "conversion": (warm_p / cold_p) if cold_p else None,
+            "conversion_ci": significance.wilson_interval(warm_p, cold_p),
             "cold_per_hr": (cold_p / shoot_h) if shoot_h else None,
             "warm_per_hr": (warm_p / shoot_h) if shoot_h else None,
             "photos_per_hr": (photos / shoot_h) if shoot_h else None,
@@ -109,6 +110,24 @@ def employee_summaries(days):
             "last_date": max(d["date"] for d in rows),
         }
     return out
+
+
+def compare_significance(con, a, b):
+    """Head-to-head conversion significance (two-proportion z-test) + Wilson CIs.
+    None if either employee has no comparable days."""
+    sums = employee_summaries(_comparable_days(con))
+    if a not in sums or b not in sums:
+        return None
+    sa, sb = sums[a], sums[b]
+    test = significance.two_proportion_test(
+        sa["warm_persons"], sa["cold_persons"],
+        sb["warm_persons"], sb["cold_persons"])
+    return {"a": a, "b": b,
+            "a_conv": sa["conversion"], "b_conv": sb["conversion"],
+            "a_ci": sa["conversion_ci"], "b_ci": sb["conversion_ci"],
+            "a_cold": sa["cold_persons"], "a_warm": sa["warm_persons"],
+            "b_cold": sb["cold_persons"], "b_warm": sb["warm_persons"],
+            "test": test}
 
 
 def radar_percentiles(summaries):
