@@ -598,7 +598,7 @@ _cfgmod = _il.import_module("tarzaniq.config")
 # write the changed param to config so fingerprint.current() reflects it
 _cfg_now = _cfgmod.load_config(); _cfg_now["warm_gap_s"] = 60.0; _cfgmod.save_config(_cfg_now)
 recompute_day(con, day_id, params)  # params already has warm_gap_s=60.0
-_row = db.day_row(con2 if False else con, day_id)
+_row = db.day_row(con, day_id)
 from tarzaniq import fingerprint as _fp2  # noqa: E402
 check("recompute re-stamps to current",
       _row["processing_fingerprint"] == _fp2.fingerprint(_fp2.current()),
@@ -826,16 +826,18 @@ Append to `tests/test_archive.py` (before the final print/sys.exit):
 
 ```python
 # ---- Feature B: legacy (photo-less, model-behind) days are excluded from comparisons ----
+import json as _json3  # noqa: E402
 from tarzaniq import agg as _agg  # noqa: E402
 con = db.connect()
+days_before = _agg.overview(con)["total"]["days"]
+all_before = len(db.all_days(con))
 # Insert a photo-less day with a stale detection fingerprint and no archive.
 _stale_comp = dict(_fpb.current()); _stale_comp["detection_fp"] = "deadbeef0000"
-import json as _json3  # noqa: E402
 con.execute("INSERT INTO days(date,weekday,place,employee,source_folder,"
             "stats_json,params_json,app_version,committed_at,"
             "processing_fingerprint,fp_components,has_archive) "
             "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-            ("2020-01-01", "Wednesday", "OldBazaar", "Ana", None,
+            ("2020-01-01", "Wednesday", "OldBazaar", "LegacyAnn", None,
              _json3.dumps({"conversion": 0.5, "cold_persons": 2, "warm_persons": 1,
                            "photos_total": 5, "shoot_s": 100.0, "span_s": 200.0,
                            "weekday": "Wednesday", "cold_events": 1,
@@ -846,14 +848,14 @@ con.execute("INSERT INTO days(date,weekday,place,employee,source_folder,"
              _fpb.fingerprint(_stale_comp), _json3.dumps(_stale_comp), 0))
 con.commit()
 ov = _agg.overview(con)
-check("legacy day excluded from overview leaderboard",
-      all(s["employee"] != "Ana" or True for s in ov["leaderboard"]))  # Ana may exist from other days
-# precise check: the legacy 2020 day is not counted in totals
-check("legacy day not in overview day count",
-      "2020-01-01" not in [r["date"] for r in ov["recent"]])
-# but it is still listed by db.all_days (viewable)
-check("legacy day still in all_days",
-      "2020-01-01" in [d["date"] for d in db.all_days(con)])
+check("legacy day excluded from overview totals (count unchanged)",
+      ov["total"]["days"] == days_before, f"{days_before} -> {ov['total']['days']}")
+check("legacy employee absent from leaderboard",
+      all(s["employee"] != "LegacyAnn" for s in ov["leaderboard"]))
+# but it IS still listed by db.all_days (viewable), so the row really exists
+check("legacy day still listed by all_days",
+      len(db.all_days(con)) == all_before + 1
+      and "2020-01-01" in [d["date"] for d in db.all_days(con)])
 con.close()
 ```
 
@@ -931,13 +933,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 - [ ] **Step 1: Write the failing test**
 
-In `tests/test_server.py`, alongside the other route smokes (near the `/api/reprocess` smoke), add:
-
-```python
-r = client.get("/api/comparability") if False else None  # placeholder removed below
-```
-
-Replace that placeholder with the file's actual request style (it uses `urllib`/a `get`/`post` helper — match it):
+In `tests/test_server.py`, alongside the other route smokes (near the `/api/reprocess` smoke), add two checks using the **same request helpers the surrounding smokes already use** (read the top of `test_server.py` — Feature A's reprocess smoke used a `post(...)` helper and there is a GET helper for the data routes; match those exact names):
 
 ```python
 j = get("/api/comparability")
@@ -947,7 +943,7 @@ r = post("/api/bring-current", {})
 check("bring-current ok", r.get("ok") is True, str(r))
 ```
 
-(Use the same `get`/`post` helpers the surrounding smokes use; read the top of `test_server.py` to confirm their names.)
+If the file's GET helper has a different name (e.g. `api`/`g`/`get_json`), use that; the assertion content stays the same.
 
 - [ ] **Step 2: Run test to verify it fails**
 
