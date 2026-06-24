@@ -620,6 +620,44 @@ def recompute_day(con, day_id, params):
     return stats
 
 
+# ------------------------------------------------------------------ comparability
+
+def bring_current(state, con, enqueue_reprocess=True):
+    """Route every stale day to the cheapest valid path so the dataset
+    converges to one current fingerprint. Cheap recomputes always run inline
+    (and re-stamp). Reprocess-class days are queued on the worker only when
+    enqueue_reprocess is True (the settings-save preview passes False so it can
+    prompt before launching hours of work). Photo-less model/detection-behind
+    days are left legacy (excluded by agg)."""
+    cur = fingerprint.current()
+    cur_fp = fingerprint.fingerprint(cur)
+    params = config.engagement_params(config.load_config())
+    out = {"recomputed": 0, "reprocess_queued": 0, "reprocess_pending": 0,
+           "legacy": 0, "current": 0}
+    reprocess_ids = []
+    for d in db.stale_days(con, cur_fp):
+        stored = json.loads(d["fp_components"]) if d["fp_components"] else None
+        decision = fingerprint.route(stored, cur, bool(d["has_archive"]))
+        if decision == "recompute":
+            try:
+                recompute_day(con, d["id"], params)
+                out["recomputed"] += 1
+            except Exception:
+                pass
+        elif decision == "reprocess":
+            reprocess_ids.append(d["id"])
+        elif decision == "legacy":
+            out["legacy"] += 1
+        else:
+            out["current"] += 1
+    if reprocess_ids and enqueue_reprocess:
+        state.enqueue_reprocess(reprocess_ids)
+        out["reprocess_queued"] = len(reprocess_ids)
+    else:
+        out["reprocess_pending"] = len(reprocess_ids)
+    return out
+
+
 # ------------------------------------------------------------------ reprocess
 
 def reprocess_day(con, day_id, engine, cfg, progress=None, cancel_check=None,

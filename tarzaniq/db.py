@@ -305,6 +305,13 @@ def all_days(con, employee=None, place=None, date_from=None, date_to=None):
     return [dict(r) for r in con.execute(q, args)]
 
 
+def stale_days(con, current_fp):
+    """Days whose stored fingerprint != the current one (NULL counts as stale)."""
+    return [dict(r) for r in con.execute(
+        "SELECT * FROM days WHERE processing_fingerprint IS NULL "
+        "OR processing_fingerprint != ? ORDER BY date ASC", (current_fp,))]
+
+
 def day_photos(con, day_id):
     return [dict(r) for r in con.execute(
         "SELECT * FROM photos WHERE day_id=? ORDER BY t ASC, seq ASC",

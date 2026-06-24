@@ -233,5 +233,29 @@ check("reprocess cancel returns None", _res is None)
 check("reprocess cancel committed nothing new", len(db.all_days(_con)) == _before)
 _con.close()
 
+# ---- Feature B: bring_current routes stale days ----
+from tarzaniq import fingerprint as _fpb  # noqa: E402
+from tarzaniq.pipeline import bring_current  # noqa: E402
+
+con = db.connect()
+# everything currently committed should be current
+cur_fp = _fpb.fingerprint(_fpb.current())
+check("no stale days initially", len(db.stale_days(con, cur_fp)) == 0,
+      str([d["date"] for d in db.stale_days(con, cur_fp)]))
+
+# change a FACE param in config -> Ana (has archive) should route to reprocess
+_c = config.load_config(); _c["min_face_frac"] = _c["min_face_frac"] + 0.01
+config.save_config(_c)
+new_fp = _fpb.fingerprint(_fpb.current())
+stale = db.stale_days(con, new_fp)
+check("face change makes days stale", len(stale) >= 1)
+res = bring_current(st, con)
+check("bring_current queued a reprocess for the archived day", res["reprocess_queued"] >= 1, str(res))
+con.close()
+
+# restore config so later/other runs aren't affected
+_c2 = config.load_config(); _c2["min_face_frac"] = _c2["min_face_frac"] - 0.01
+config.save_config(_c2)
+
 print("ALL GREEN" if not fails else f"{len(fails)} FAILURES: {fails}")
 sys.exit(1 if fails else 0)
