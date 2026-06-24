@@ -31,6 +31,13 @@ DEFAULTS = {
     "preview_max_width": 760,
     "decode_reduced": True,     # decode JPEGs at half resolution (fast, plenty for faces)
     "sounds_enabled": True,
+
+    # --- permanent JXL photo archive (Feature A) ---
+    "archive_enabled": True,    # write a compressed JXL + manifest on ingest
+    "archive_dir": "",          # "" => $TARZANIQ_ARCHIVE or ~/Documents/TarzanIQ Archive
+    "archive_long_edge": 1600,  # max long edge of the archived copy (px)
+    "archive_target_kb": 150,   # size intent; calibrate archive_quality to it
+    "archive_quality": 80,      # JXL quality used at ingest
 }
 
 CONFIG_VERSION = 1
@@ -65,6 +72,19 @@ def models_dir() -> Path:
 
 def config_path() -> Path:
     return data_dir() / "config.json"
+
+
+def archive_dir() -> Path:
+    """Permanent photo archive, SEPARATE from the data dir (may be an external
+    drive). Precedence: config['archive_dir'] -> $TARZANIQ_ARCHIVE -> default."""
+    cfg = load_config()
+    override = cfg.get("archive_dir") or os.environ.get("TARZANIQ_ARCHIVE")
+    if override:
+        p = Path(override).expanduser()
+    else:
+        p = Path.home() / "Documents" / "TarzanIQ Archive"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
 
 
 # ---------------------------------------------------------------- load/save

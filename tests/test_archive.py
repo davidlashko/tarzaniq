@@ -49,5 +49,26 @@ check("sha256 known vector",
       archive.sha256_bytes(b"abc") ==
       "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
 
+# ---- config ----
+from tarzaniq import config  # noqa: E402
+
+cfg = config.load_config()
+for k, default in (("archive_enabled", True), ("archive_long_edge", 1600),
+                   ("archive_target_kb", 150), ("archive_quality", 80),
+                   ("archive_dir", "")):
+    check(f"DEFAULTS has {k}", k in config.DEFAULTS and config.DEFAULTS[k] == default,
+          str(config.DEFAULTS.get(k)))
+    check(f"loaded cfg has {k}", k in cfg)
+
+ad = config.archive_dir()
+check("archive_dir honors TARZANIQ_ARCHIVE",
+      str(ad) == os.environ["TARZANIQ_ARCHIVE"], str(ad))
+check("archive_dir exists", ad.is_dir())
+
+# round-trips through save/load (keys not in DEFAULTS get dropped)
+saved = config.save_config({**cfg, "archive_long_edge": 1200})
+check("archive_long_edge persists", config.load_config()["archive_long_edge"] == 1200)
+config.save_config({**cfg, "archive_long_edge": 1600})  # restore
+
 print("ALL GREEN" if not fails else f"{len(fails)} FAILURES: {fails}")
 sys.exit(1 if fails else 0)
