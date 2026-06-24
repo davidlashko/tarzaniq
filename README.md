@@ -157,8 +157,8 @@ committed.
 |---|---|
 | Backend | Python 3.11–3.12, Flask, SQLite (stdlib `sqlite3`) |
 | Inference | OpenCV only — YuNet (face detection), SFace (identity, cosine 0.36), GoogleNet ONNX (age + gender) |
-| Data / exports | `openpyxl` (styled Excel + embedded JSON), Pillow (EXIF) |
-| Frontend | Vanilla JS SPA, **no build step**, Chart.js + pixel fonts bundled offline |
+| Data / exports | `openpyxl` (styled Excel + embedded JSON), Pillow + `pillow-jxl-plugin` (EXIF + JXL archive) |
+| Frontend | Vanilla JS SPA, **no build step**, Chart.js 4.5.1 + pixel fonts bundled offline |
 | Tests | Standalone Python scripts + a jsdom DOM smoke test (Node) |
 | Packaging | `install.sh`: venv, SHA-256-verified model download, AppleScript droplet + Finder Quick Action |
 
@@ -170,12 +170,14 @@ committed.
 
 - **v1.0.0 "Silverback"** — shipped. Full ingest → stats → dashboard → Excel pipeline; test suite
   green (`test_engagements`, `test_server`, `test_e2e`, `dom_smoke`).
-- **Feature A — permanent JXL photo archive** — in progress. Keep a ~150 KB JXL of every photo +
-  a per-day manifest, and a `reprocess` tier that re-runs the full pipeline from the archive. Spec:
-  [docs/superpowers/specs/2026-06-24-jxl-archive-design.md](docs/superpowers/specs/2026-06-24-jxl-archive-design.md).
-- **Feature B — universal comparability** — planned. Stamp each day with a processing fingerprint
-  and auto-bring stale days current so every number is comparable by construction. See
-  [docs/HANDOFF.md](docs/HANDOFF.md) §7.2.
+- **Feature A — permanent JXL photo archive** — shipped. Keeps a ~150 KB JXL of every photo +
+  a per-day manifest; `reprocess` tier re-runs the full pipeline from the archive. Design doc
+  (historical): [docs/superpowers/specs/2026-06-24-jxl-archive-design.md](docs/superpowers/specs/2026-06-24-jxl-archive-design.md) (design doc).
+- **Feature B — universal comparability** — shipped. Each day stamped with a processing fingerprint
+  (config + model + algo versions; schema v1→v2 migration); stale days auto-brought current via
+  `bring_current`. See [docs/HANDOFF.md](docs/HANDOFF.md) §7.2 (design doc).
+- **Feature C — statistical significance on conversions** — shipped. Two-proportion z-test + Wilson
+  CIs on the Compare page (`significance.py`); exposed via `GET /api/compare/<a>/<b>`.
 
 ## Quick start (development)
 
@@ -214,9 +216,12 @@ tarzaniq/                       # repo root
 │   ├── engagements.py          # cold/warm engagement rules (the spec, pixel-blind)
 │   ├── stats.py                # per-day stats derivation (stats_version 2)
 │   ├── engine.py               # FaceEngine / MockEngine / SubjectTracker / annotate_preview
-│   ├── db.py                   # SQLite schema (v1) + accessors + weekly backup
+│   ├── db.py                   # SQLite schema (v2) + accessors + weekly backup + v1→v2 migration
 │   ├── excelio.py              # styled Excel export + import (full day embedded as JSON)
-│   ├── pipeline.py             # job queue, worker thread, SSE, prompts, ingest + recompute
+│   ├── pipeline.py             # job queue, worker thread, SSE, prompts, ingest + recompute + reprocess
+│   ├── archive.py              # JXL encode + per-day manifest (original filename, seq, EXIF time, sha256)
+│   ├── fingerprint.py          # compute/compare processing_fingerprint (config + model + algo versions)
+│   ├── significance.py         # two-proportion z-test + Wilson CIs for conversion comparisons
 │   ├── agg.py                  # read-tier aggregations (reads only stats_json + scalar cols)
 │   ├── server.py               # Flask routes; create(engine_factory=…) + main()
 │   └── static/                 # SPA: js/{app,util,charts,live,pages}, css, img, vendor, fonts
@@ -249,22 +254,22 @@ read tier (instant, no images):
 ```
 
 Two re-derivation tiers: **`recompute`** (imageless — re-derives engagement math from stored rows
-after a threshold change) exists today; **`reprocess`** (re-runs the full pipeline from the JXL
-archive) arrives with Feature A. Full module-level map and Feature A/B hook points:
-[docs/ARCHITECTURE-REVIEW.md](docs/ARCHITECTURE-REVIEW.md).
+after a threshold change) and **`reprocess`** (re-runs the full pipeline from the JXL archive).
+**`bring_current`** auto-routes stale days to the cheaper tier when possible. Full module-level map:
+[docs/ARCHITECTURE-REVIEW.md](docs/ARCHITECTURE-REVIEW.md) (pre-implementation planning doc).
 
-## Data model (SQLite, schema v1)
+## Data model (SQLite, schema v2)
 
 | Table | Holds |
 |---|---|
 | `meta` | schema version + housekeeping |
-| `days` | one row per committed day; `stats_json`, money, source folder, `UNIQUE(date, place, employee)` |
+| `days` | one row per committed day; `stats_json`, money, source folder, `UNIQUE(date, place, employee)`; plus `processing_fingerprint` (TEXT), `fp_components` (TEXT/JSON), `has_archive` (INTEGER) added in v1→v2 migration |
 | `photos` | per-photo rows (filename, sequence, time, kind) — enables imageless `recompute` |
 | `subjects` | per-day subject rows (age/gender guesses, photo counts) — identities reset daily |
 | `engagements` | derived cold/warm/pose events for the day timeline |
 | `names`, `places` | the employee/place registries (with typo-mapping) |
 
-Cascade deletes from `days`; a weekly backup keeps the last 8 copies.
+Cascade deletes from `days`; a weekly backup keeps the last 8 copies. Schema migrates automatically from v1 to v2 on first open.
 
 ## HTTP API (localhost only)
 
@@ -292,6 +297,10 @@ Cascade deletes from `days`; a weekly backup keeps the last 8 copies.
 | `GET` | `/api/registry` | Names + places registries |
 | `POST` | `/api/registry/rename` | Rename an employee or place |
 | `POST` | `/api/recompute` | Re-derive engagement stats from stored rows (no images) |
+| `POST` | `/api/reprocess` | Queue full re-run of a day from the JXL archive |
+| `POST` | `/api/bring-current` | Route stale days to recompute or reprocess as needed |
+| `GET` | `/api/comparability` | Current processing fingerprint + stale day counts |
+| `GET` | `/api/compare/<a>/<b>` | Head-to-head conversion significance (z-test + Wilson CIs) |
 | `GET` | `/api/days` | List all committed days |
 
 ## Configuration
@@ -314,6 +323,11 @@ absent from `DEFAULTS` are silently dropped on save — add new ones there.
 | `preview_max_width` | 760 | Max preview width (px) |
 | `decode_reduced` | true | Decode JPEGs at half resolution (fast, plenty for faces) |
 | `sounds_enabled` | true | UI sound effects |
+| `archive_enabled` | true | Encode a ~150 KB JXL copy of each photo during ingest |
+| `archive_dir` | "" → `~/Documents/TarzanIQ Archive` | Where JXL copies and manifests are stored |
+| `archive_long_edge` | 1600 | Resize long edge (px) before JXL encode |
+| `archive_target_kb` | 150 | Target file size in KB for the JXL encode |
+| `archive_quality` | 80 | JXL quality setting (0–100) |
 
 ## Testing
 

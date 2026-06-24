@@ -248,6 +248,25 @@ check("recompute re-stamps to current",
       _row["processing_fingerprint"] == _fp2.fingerprint(_fp2.current()),
       _row["processing_fingerprint"])
 
+# ---- CRITICAL: recompute must NOT re-stamp detection/model/algo (no false "current") ----
+import json as _jc
+from tarzaniq import fingerprint as _fpc
+_cid = db.all_days(con)[0]["id"]
+_good_fp_json = db.day_row(con, _cid)["fp_components"]  # save to restore after checks
+_stale = dict(_fpc.current()); _stale["detection_fp"] = "STALEdetect0"
+con.execute("UPDATE days SET fp_components=?, processing_fingerprint=?, has_archive=0 WHERE id=?",
+            (_jc.dumps(_stale), _fpc.fingerprint(_stale), _cid)); con.commit()
+recompute_day(con, _cid, config.engagement_params(config.load_config()))
+_aft = _jc.loads(db.day_row(con, _cid)["fp_components"])
+check("recompute preserves stale detection_fp", _aft["detection_fp"] == "STALEdetect0", str(_aft))
+check("recompute refreshes engagement_fp",
+      _aft["engagement_fp"] == _fpc.current()["engagement_fp"])
+check("detection-behind day still NOT comparable after recompute",
+      _fpc.is_comparable(_aft, _fpc.current(), False) is False)
+# restore day to comparable so agg checks see all 3 days
+con.execute("UPDATE days SET fp_components=?, processing_fingerprint=? WHERE id=?",
+            (_good_fp_json, _fpc.fingerprint(_fpc.current()), _cid)); con.commit()
+
 # ---------------------------------------------------------------- agg smoke
 from tarzaniq import agg  # noqa: E402
 ov = agg.overview(con2)
@@ -273,6 +292,15 @@ check("compare_significance shape", _cmp is not None and "test" in _cmp
       and "significant" in _cmp["test"] and "a_ci" in _cmp and "b_ci" in _cmp, str(_cmp))
 check("compare missing employee -> None",
       agg.compare_significance(con2, "Marko", "NoSuchApe") is None)
+
+# rename with a quote must not corrupt stats_json
+_rid = db.all_days(con)[0]["id"]
+_emp = db.day_row(con, _rid)["employee"]
+db.rename_employee(con, _emp, 'O"Hara')
+import json as _jr
+check("rename with quote keeps stats_json valid",
+      isinstance(_jr.loads(db.day_row(con, _rid)["stats_json"]), dict))
+db.rename_employee(con, 'O"Hara', _emp)  # restore
 
 con.close(); con2.close()
 print("ALL GREEN" if not fails else f"{len(fails)} FAILURES: {fails}")

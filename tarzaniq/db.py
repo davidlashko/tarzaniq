@@ -4,6 +4,8 @@ kept so engagement logic can be re-run when thresholds change, without
 ever touching the original photos again.
 
 No embeddings, no crops, no pixels are stored — derived stats only.
+(The DB stores derived stats only; compressed photo copies live separately
+in the archive dir — see archive.py.)
 """
 
 import json
@@ -187,7 +189,7 @@ def rename_employee(con, old, new):
     con.execute("UPDATE days SET employee=? WHERE employee=?", (new, old))
     con.execute("UPDATE days SET stats_json=REPLACE(stats_json, ?, ?) "
                 "WHERE employee=?",
-                (f'"employee": "{old}"', f'"employee": "{new}"', new))
+                (f'"employee": {json.dumps(old)}', f'"employee": {json.dumps(new)}', new))
     con.execute("DELETE FROM names WHERE name=?", (old,))
     con.commit()
 

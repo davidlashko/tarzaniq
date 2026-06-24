@@ -59,23 +59,30 @@ Config defaults (`tarzaniq/config.py`): `warm_gap_s=5`, `break_minutes=20`, `max
   GoogleNet ONNX. Models downloaded by `install.sh` with SHA-256 verification (~83 MB, never
   committed). **Models can't run without real photos** — the **MockEngine** path keeps the app
   and DOM smoke test runnable model-free. Keep that property.
-- **Privacy (as built):** face embeddings in RAM only; only derived stats persisted; identity
-  resets per day. ⚠️ Feature A changes this (compressed photos will now be archived).
+- **Privacy:** compressed photo copies (~150 KB JXL) are archived to a separate configurable dir
+  (default `~/Documents/TarzanIQ Archive`); face embeddings stay in RAM only; the data dir holds
+  only derived stats; identity resets per day. Archiving is configurable and can be disabled.
 - **Data dir** (`~/Documents/TarzanIQ Data/`, override `TARZANIQ_DATA`): `tarzaniq.db`, `exports/`
   (one styled `.xlsx`/day), `models/`, `logs/`, `backups/`. **Survives reinstalls — never write
   app code there, never commit it.**
-- **DB is source of truth** (`tarzaniq/db.py`, schema v1). Each Excel export also embeds the full
+- **DB is source of truth** (`tarzaniq/db.py`, schema v2; `processing_fingerprint`, `fp_components`,
+  `has_archive` columns added in v1→v2 migration). Each Excel export also embeds the full
   day (chunked JSON in a Meta sheet) so the dataset rebuilds from exports if the DB is lost.
 - **Pipeline** (`tarzaniq/pipeline.py`): job queue + worker thread, **SSE** to the dashboard,
   ask/answer prompts, pause flag, `caffeinate` during processing. Decodes at half-res.
 
 ## 4. Module map (do not rebuild — all green per hand-off)
-`__init__.py` (v1.0.0 "Silverback", port 43117) · `config.py` · `naming.py` · `exifutil.py` ·
-`engagements.py` · `stats.py` (per-break intervals; stats_version 2) · `engine.py`
-(`FaceEngine`/`MockEngine`/`SubjectTracker`/`annotate_preview`) · `db.py` (schema v1,
-`days UNIQUE(date,place,employee)`, cascade deletes, weekly backup, rename/replace) ·
+`__init__.py` (v1.0.0 "Silverback", port 43117; `MODEL_VERSION`/`ALGO_VERSION` for fingerprinting) ·
+`config.py` · `naming.py` · `exifutil.py` · `engagements.py` · `stats.py` (per-break intervals;
+stats_version 2) · `engine.py` (`FaceEngine`/`MockEngine`/`SubjectTracker`/`annotate_preview`) ·
+`db.py` (schema v2, `days UNIQUE(date,place,employee)` + `processing_fingerprint`/`fp_components`/
+`has_archive`, cascade deletes, weekly backup, rename/replace, v1→v2 migration) ·
 `excelio.py` (export + `import_day`) · `pipeline.py` (`Job`, `AppState`, prompts, `commit_day`,
-`recompute_day`, `build_day_record`) · `agg.py` (overview/leaderboard/detail/patterns/places) ·
+`recompute_day`, `reprocess_day`, `bring_current`, `build_day_record`) ·
+`archive.py` (JXL encode + per-day manifest; called by pipeline during ingest) ·
+`fingerprint.py` (compute/compare `processing_fingerprint` from config + model + algo versions) ·
+`significance.py` (two-proportion z-test + Wilson CIs for conversion comparisons) ·
+`agg.py` (overview/leaderboard/detail/patterns/places) ·
 `server.py` (`create(engine_factory=…)` + routes, `main()`).
 Frontend: `static/js/{app,util,charts,live,pages}.js`, `static/css/jungle.css`, bundled pixel fonts.
 
@@ -104,16 +111,15 @@ node tests/dom_smoke.mjs http://127.0.0.1:43991
 runs and every page renders **without** the ONNX models — this is what makes the frontend
 testable. Keep that property.
 
-## 6. Current work — the two new features
-See [docs/HANDOFF.md](docs/HANDOFF.md) §6–§9. Build **A first, then B**.
-- **Feature A — permanent JXL photo archive:** during ingest, also encode each JPEG to a
-  ~150 KB `.jxl` in a configurable archive dir (separate from the data dir) + a per-day manifest
-  (original filename, sequence, EXIF time, sha256). New **`reprocess`** job tier re-runs the full
-  pipeline from the archive (vs existing imageless `recompute`).
-- **Feature B — universal comparability:** stamp each day with a `processing_fingerprint`
-  (config + model + algo versions; schema v1→v2 migration). Auto-bring stale days current via a
-  background queue — cheap `recompute` for engagement-only changes, expensive `reprocess` for
-  model/detection changes — so every number is comparable by construction.
+## 6. Completed features (shipped)
+All three features are implemented and merged. See `docs/` for original design docs (historical).
+- **Feature A — permanent JXL photo archive:** each JPEG encoded to ~150 KB `.jxl` in a
+  configurable archive dir during ingest; per-day manifest (filename, sequence, EXIF time, sha256).
+  `reprocess` job tier re-runs the full pipeline from the archive.
+- **Feature B — universal comparability:** schema v1→v2 migration; `processing_fingerprint` per
+  day; `bring_current` auto-routes stale days to `recompute` or `reprocess` as needed.
+- **Feature C — statistical significance:** two-proportion z-test + Wilson CIs on the Compare page
+  (`significance.py`); exposed via `GET /api/compare/<a>/<b>`.
 
 ## 7. Conventions
 - **Commits:** Conventional Commits (`feat(scope):`, `fix(scope):`, `chore:`, `docs:`),
