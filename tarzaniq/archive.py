@@ -47,3 +47,45 @@ def decode_jxl(path) -> np.ndarray:
     with Image.open(str(path)) as im:
         rgb = np.asarray(im.convert("RGB"))
     return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+
+
+# ---------------------------------------------------------------- layout
+
+def day_archive_dir(folder_name: str) -> Path:
+    return config.archive_dir() / folder_name
+
+
+def manifest_path(folder_name: str) -> Path:
+    return day_archive_dir(folder_name) / "manifest.json"
+
+
+def write_manifest(folder_name: str, header: dict, entries: list) -> None:
+    """Atomically write the per-day manifest (header fields + a `photos` list)."""
+    d = day_archive_dir(folder_name)
+    d.mkdir(parents=True, exist_ok=True)
+    payload = dict(header)
+    payload["photos"] = entries
+    target = manifest_path(folder_name)
+    tmp = target.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(payload, indent=2))
+    tmp.replace(target)
+
+
+def read_manifest(folder_name: str):
+    p = manifest_path(folder_name)
+    if not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text())
+    except Exception:
+        return None
+
+
+def iter_archived(folder_name: str):
+    """Yield (jxl_path, manifest_entry) for each archived photo, in manifest order."""
+    man = read_manifest(folder_name)
+    if not man:
+        return
+    d = day_archive_dir(folder_name)
+    for entry in man.get("photos", []):
+        yield d / entry["jxl_filename"], entry

@@ -70,5 +70,34 @@ saved = config.save_config({**cfg, "archive_long_edge": 1200})
 check("archive_long_edge persists", config.load_config()["archive_long_edge"] == 1200)
 config.save_config({**cfg, "archive_long_edge": 1600})  # restore
 
+# ---- manifest ----
+folder = "26.06.07.CityPark.Marko"
+entries = [
+    {"original_filename": "DSC09998.JPG", "seq": 9998, "exif_time": "10:00:00.000000",
+     "exif_source": "exif", "sha256": "a" * 64, "jxl_filename": "DSC09998.jxl",
+     "jxl_bytes": 123},
+    {"original_filename": "DSC09999.JPG", "seq": 9999, "exif_time": "10:00:02.500000",
+     "exif_source": "exif", "sha256": "b" * 64, "jxl_filename": "DSC09999.jxl",
+     "jxl_bytes": 456},
+]
+header = {"folder": folder, "date": "2026-06-07", "place": "CityPark",
+          "employee": "Marko", "count": len(entries)}
+# place dummy jxl files so iter_archived yields real paths
+dd = archive.day_archive_dir(folder)
+dd.mkdir(parents=True, exist_ok=True)
+for e in entries:
+    (dd / e["jxl_filename"]).write_bytes(b"x")
+archive.write_manifest(folder, header, entries)
+
+check("manifest written", archive.manifest_path(folder).exists())
+man = archive.read_manifest(folder)
+check("manifest count", man and man["count"] == 2, str(man))
+check("manifest preserves original filename + seq",
+      man["photos"][0]["original_filename"] == "DSC09998.JPG"
+      and man["photos"][0]["seq"] == 9998)
+got = list(archive.iter_archived(folder))
+check("iter yields 2 (path, entry)", len(got) == 2 and got[0][0].name == "DSC09998.jxl")
+check("read_manifest missing -> None", archive.read_manifest("99.99.99.Nope.Nobody") is None)
+
 print("ALL GREEN" if not fails else f"{len(fails)} FAILURES: {fails}")
 sys.exit(1 if fails else 0)
