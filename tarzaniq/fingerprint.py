@@ -38,19 +38,20 @@ def fingerprint(comp: dict) -> str:
             f"-m{comp['model_version']}-a{comp['algo_version']}")
 
 
-def route(stored, current_comp: dict, has_archive: bool) -> str:
+def route(stored: dict | None, current_comp: dict, has_archive: bool) -> str:
     """current | recompute | reprocess | legacy."""
-    if stored and stored == current_comp:
+    keys = ("engagement_fp", "detection_fp", "model_version", "algo_version")
+    if not stored or any(k not in stored for k in keys):
+        return "recompute"          # no/partial stored fp: cheap re-derive + stamp
+    if stored == current_comp:
         return "current"
-    if stored:
-        if (stored.get("detection_fp") != current_comp["detection_fp"]
-                or stored.get("model_version") != current_comp["model_version"]
-                or stored.get("algo_version") != current_comp["algo_version"]):
-            return "reprocess" if has_archive else "legacy"
-        return "recompute"          # only engagement_fp differs
-    return "recompute"              # no stored fp (pre-Feature-B day): cheap stamp
+    if (stored["detection_fp"] != current_comp["detection_fp"]
+            or stored["model_version"] != current_comp["model_version"]
+            or stored["algo_version"] != current_comp["algo_version"]):
+        return "reprocess" if has_archive else "legacy"
+    return "recompute"              # only engagement_fp differs
 
 
-def is_comparable(stored, current_comp: dict, has_archive: bool) -> bool:
+def is_comparable(stored: dict | None, current_comp: dict, has_archive: bool) -> bool:
     """A day is excluded from comparisons only when it is legacy."""
     return route(stored, current_comp, has_archive) != "legacy"

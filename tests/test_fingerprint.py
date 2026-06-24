@@ -47,5 +47,15 @@ check("legacy not comparable", fingerprint.is_comparable(comp, fingerprint.compo
 check("reprocess-pending still comparable", fingerprint.is_comparable(comp, fingerprint.components(c3), True) is True)
 check("None stored comparable", fingerprint.is_comparable(None, comp, False) is True)
 
+# current() is a public wrapper over config
+check("current() returns the 4 component keys",
+      set(fingerprint.current()) ==
+      {"engagement_fp", "detection_fp", "model_version", "algo_version"})
+# a partial stored dict (missing keys) routes to cheap recompute, not reprocess/legacy
+check("partial stored dict -> recompute",
+      fingerprint.route({"engagement_fp": comp["engagement_fp"]}, comp, False) == "recompute")
+check("empty stored dict -> recompute",
+      fingerprint.route({}, comp, True) == "recompute")
+
 print("ALL GREEN" if not fails else f"{len(fails)} FAILURES: {fails}")
 sys.exit(1 if fails else 0)
