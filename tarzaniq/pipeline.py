@@ -375,19 +375,6 @@ class AppState:
                 self.broadcast("status", {"job": job.brief(),
                                           "counts": engager.live_counts()})
 
-        if do_archive and archive_entries:
-            try:
-                archive.write_manifest(job.name, {
-                    "folder": job.name, "date": date_iso, "place": job.place,
-                    "employee": job.employee, "archive_long_edge": arch_long,
-                    "archive_target_kb": int(cfg.get("archive_target_kb", 150)),
-                    "archive_quality": arch_q, "app_version": APP_VERSION,
-                    "count": len(archive_entries),
-                    "archived_at": datetime.now().isoformat()},
-                    archive_entries)
-            except Exception:
-                pass
-
         # ---- wrap up analysis
         eng_final = engager.finalize()
         subj_meta = tracker.finalize()
@@ -421,6 +408,19 @@ class AppState:
         day_id = db.commit_day(con, day_record)
         job.result_day_id = day_id
 
+        if do_archive and archive_entries:
+            try:
+                archive.write_manifest(job.name, {
+                    "folder": job.name, "date": date_iso, "place": job.place,
+                    "employee": job.employee, "archive_long_edge": arch_long,
+                    "archive_target_kb": int(cfg.get("archive_target_kb", 150)),
+                    "archive_quality": arch_q, "app_version": APP_VERSION,
+                    "count": len(archive_entries),
+                    "archived_at": datetime.now().isoformat()},
+                    archive_entries)
+            except Exception:
+                pass
+
         out = config.exports_dir() / f"{job.name}.xlsx"
         export_day(day_record, out)
         job.export_path = str(out)
@@ -439,12 +439,17 @@ class AppState:
                 self.broadcast("status", {"job": job.brief()})
 
         try:
-            result = reprocess_day(con, job.day_id, self.engine(), cfg, progress=prog)
+            result = reprocess_day(con, job.day_id, self.engine(), cfg, progress=prog,
+                                   cancel_check=lambda: job.cancel,
+                                   pause_wait=self.run_flag.wait)
         except FileNotFoundError as e:
             job.status, job.message = "error", str(e)
             return
         if result is None:
-            job.status, job.message = "error", "Day not found"
+            if job.cancel:
+                job.status, job.message = "discarded", "Cancelled"
+            else:
+                job.status, job.message = "error", "Day not found"
             return
         stats, new_id = result
         job.result_day_id = new_id
@@ -611,13 +616,16 @@ def recompute_day(con, day_id, params):
 
 # ------------------------------------------------------------------ reprocess
 
-def reprocess_day(con, day_id, engine, cfg, progress=None):
+def reprocess_day(con, day_id, engine, cfg, progress=None, cancel_check=None,
+                  pause_wait=None):
     """Re-run the FULL face pipeline from the archived JXLs for one day.
 
     Unlike recompute_day (imageless, keeps identities), this re-decodes the
     archive and re-detects faces, so it produces fresh subject ids. Returns
     (stats, new_day_id); None if the day is missing. Raises FileNotFoundError
-    if the day has no archive/manifest."""
+    if the day has no archive/manifest.
+    cancel_check()/pause_wait() are optional callables for cooperative
+    pause/cancel; on cancel the function returns None before committing."""
     drow = db.day_row(con, day_id)
     if not drow:
         return None
@@ -643,6 +651,10 @@ def reprocess_day(con, day_id, engine, cfg, progress=None):
     photo_records = []
     n = len(scan)
     for idx, rec in enumerate(scan):
+        if pause_wait is not None:
+            pause_wait()
+        if cancel_check is not None and cancel_check():
+            return None
         try:
             img = archive.decode_jxl(rec["path"])
         except Exception:

@@ -208,5 +208,30 @@ check("enqueue_reprocess accepted", len(queued) == 1)
 rj = _wait_done(queued[0]["id"])
 check("reprocess job done", rj.status == "done", rj.message)
 
+# ---- a declined day leaves no manifest (FIX 1) ----
+from PIL import Image as _Img2  # noqa: E402
+DEC = TMP / "ingest" / "26.06.12.OldBazaar.Ana"
+DEC.mkdir(parents=True)
+for _n in (1, 2):
+    _Img2.new("RGB", (320, 240), (_n * 7 % 255, 90, 70)).save(DEC / f"DSC{_n:04d}.JPG", "JPEG")
+_dec_added, _ = st.enqueue([str(DEC)])
+_p = _wait_prompt("money"); st.answer(_p["id"], {})
+_p = _wait_prompt("commit"); st.answer(_p["id"], {"commit": False})  # DECLINE
+_dj = _wait_done(_dec_added[0]["id"])
+check("declined day discarded", _dj.status == "discarded", _dj.status)
+check("declined day writes NO manifest",
+      archive.read_manifest("26.06.12.OldBazaar.Ana") is None)
+
+# ---- reprocess honors cancel (FIX 2) ----
+from tarzaniq.pipeline import reprocess_day as _rp  # noqa: E402
+_con = db.connect()
+_ana = [d for d in db.all_days(_con) if d["employee"] == "Ana"][0]
+_before = len(db.all_days(_con))
+_res = _rp(_con, _ana["id"], MockEngine(ing_manifest), config.load_config(),
+           cancel_check=lambda: True)
+check("reprocess cancel returns None", _res is None)
+check("reprocess cancel committed nothing new", len(db.all_days(_con)) == _before)
+_con.close()
+
 print("ALL GREEN" if not fails else f"{len(fails)} FAILURES: {fails}")
 sys.exit(1 if fails else 0)
