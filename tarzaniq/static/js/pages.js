@@ -563,6 +563,11 @@ async function pageDay(id) {
       const r = await API.post('/api/recompute', { day_id: id });
       toast(`Recomputed ${r.recomputed} day`); pageDay(id);
     } }, 'Recompute'),
+    el('button', { class: 'btn bark', onclick: async () => {
+      // reprocess this day from the permanent photo archive (Feature A)
+      toast('Reprocessing from archive…');
+      await API.post('/api/reprocess', { day_id: id });
+    } }, 'Reprocess from archive'),
     el('button', { class: 'btn red', onclick: async () => {
       if (!confirm(`Delete ${day.date} · ${day.place} · ${day.employee} from the dataset? The Excel file stays on disk.`)) return;
       await API.del('/api/day/' + id);
