@@ -112,10 +112,12 @@ Then press **Recompute** to apply.
   logs/
 ```
 
-- **Privacy (current version):** photos are not copied and faces are not stored. Face
-  fingerprints exist only in memory while a folder is processing; what's saved is numbers (times,
-  counts, age/gender guesses). Person identities reset every day — "S3" on Tuesday is unrelated to
-  "S3" on Wednesday.
+- **Privacy:** by default TarzanIQ keeps a small compressed copy (~150 KB JPEG XL)
+  of every processed photo in a separate archive folder (default
+  `~/Documents/TarzanIQ Archive`, configurable, can be an external drive) so the
+  analysis can be re-run as the app improves. Face fingerprints still live only in
+  RAM while processing; person identities reset every day. Turn archiving off in
+  Settings if you don't want the copies.
 - **Backups for free:** every Excel export carries the full day's data inside it. Lost the
   database? Settings → *Rebuild from Excel exports*.
 - Reinstalling or updating the app never touches the data folder.
