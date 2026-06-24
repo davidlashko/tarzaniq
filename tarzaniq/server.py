@@ -345,6 +345,21 @@ def api_recompute():
         con.close()
 
 
+@app.route("/api/reprocess", methods=["POST"])
+def api_reprocess():
+    data = request.get_json(force=True, silent=True) or {}
+    con = db.connect()
+    try:
+        if data.get("day_id"):
+            ids = [int(data["day_id"])]
+        else:
+            ids = [d["id"] for d in db.all_days(con)]
+    finally:
+        con.close()
+    added = state.enqueue_reprocess(ids)
+    return jsonify({"ok": True, "queued": len(added), "jobs": added})
+
+
 @app.route("/api/days")
 def api_days():
     con = db.connect()
