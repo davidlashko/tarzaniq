@@ -187,6 +187,12 @@ td.c, th.c { text-align: center; }
 .badge.brk { background: var(--bark); color: var(--bone); }
 .badge-catchup { background: var(--cold); color: var(--ink); }
 .badge-legacy  { background: var(--air);  color: var(--ink); }
+.badge-warm    { background: var(--warm); color: var(--ink); }
+.badge-air     { background: var(--air);  color: var(--ink); }
+
+/* significance line on Compare page */
+.sig { margin-top: 14px; padding-top: 10px; border-top: 2px dashed rgba(237,230,208,.2); }
+.sigrates { font-size: 16px; color: var(--bone-dim); margin-bottom: 8px; }
 
 /* comparability banner */
 .cmp-banner {
