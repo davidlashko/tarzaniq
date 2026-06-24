@@ -324,11 +324,16 @@ def day_engagements(con, day_id):
 
 
 def replace_day_analysis(con, day_id, stats, params, photos_kinds,
-                         subjects, engagements):
+                         subjects, engagements,
+                         processing_fingerprint=None, fp_components=None):
     """Used by recompute: update analysis results in place, keep photos
     rows (only their kind changes) and money."""
-    con.execute("UPDATE days SET stats_json=?, params_json=? WHERE id=?",
-                (json.dumps(stats), json.dumps(params), day_id))
+    con.execute("UPDATE days SET stats_json=?, params_json=?, "
+                "processing_fingerprint=COALESCE(?, processing_fingerprint), "
+                "fp_components=COALESCE(?, fp_components) WHERE id=?",
+                (json.dumps(stats), json.dumps(params), processing_fingerprint,
+                 json.dumps(fp_components) if fp_components is not None else None,
+                 day_id))
     for pid, kind in photos_kinds:
         con.execute("UPDATE photos SET kind=? WHERE id=?", (kind, pid))
     con.execute("DELETE FROM subjects WHERE day_id=?", (day_id,))

@@ -233,6 +233,18 @@ con2 = db.connect()
 st2 = json.loads(db.day_row(con2, day_id)["stats_json"])
 check("recompute persisted", st2["warm_persons"] == 1)
 
+# ---- Feature B: recompute re-stamps the fingerprint (no infinite re-queue) ----
+import importlib as _il  # noqa: E402
+_cfgmod = _il.import_module("tarzaniq.config")
+# write the changed param to config so fingerprint.current() reflects it
+_cfg_now = _cfgmod.load_config(); _cfg_now["warm_gap_s"] = 60.0; _cfgmod.save_config(_cfg_now)
+recompute_day(con, day_id, params)  # params already has warm_gap_s=60.0
+_row = db.day_row(con, day_id)
+from tarzaniq import fingerprint as _fp2  # noqa: E402
+check("recompute re-stamps to current",
+      _row["processing_fingerprint"] == _fp2.fingerprint(_fp2.current()),
+      _row["processing_fingerprint"])
+
 # ---------------------------------------------------------------- agg smoke
 from tarzaniq import agg  # noqa: E402
 ov = agg.overview(con2)

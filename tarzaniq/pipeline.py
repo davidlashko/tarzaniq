@@ -606,7 +606,9 @@ def recompute_day(con, day_id, params):
                            params, photo_records, eng_final, subj_meta,
                            has_archive=bool(drow["has_archive"]))
     db.replace_day_analysis(con, day_id, stats, params, kinds_by_pid,
-                            rec["subjects"], rec["engagements"])
+                            rec["subjects"], rec["engagements"],
+                            processing_fingerprint=rec["processing_fingerprint"],
+                            fp_components=rec["fp_components"])
 
     # refresh the Excel export so the archive matches the dataset
     folder_name = Path(drow["source_folder"]).name if drow["source_folder"] \
