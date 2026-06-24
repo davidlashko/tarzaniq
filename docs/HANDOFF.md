@@ -1,3 +1,5 @@
+> **Status (2026-06-25):** Features A, B, and C are now implemented and merged — this document is the original pre-implementation planning record; see README.md / CLAUDE.md for current truth.
+
 # TarzanIQ — Claude Code Hand-off
 
 ## How to use this document

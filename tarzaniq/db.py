@@ -4,6 +4,8 @@ kept so engagement logic can be re-run when thresholds change, without
 ever touching the original photos again.
 
 No embeddings, no crops, no pixels are stored — derived stats only.
+(The DB stores derived stats only; compressed photo copies live separately
+in the archive dir — see archive.py.)
 """
 
 import json

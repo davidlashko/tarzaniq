@@ -1,6 +1,7 @@
 <!-- Generated review artifact: a code-grounded architecture map + Feature A/B
      integration plan, produced from a parallel read of every module. Companion
      to docs/HANDOFF.md. Update as the codebase evolves. -->
+> **Status (2026-06-25):** Features A, B, and C are now implemented and merged — this document is the original pre-implementation planning record; see README.md / CLAUDE.md for current truth.
 
 # TarzanIQ — Architecture Review & Feature A/B Integration Plan
 
