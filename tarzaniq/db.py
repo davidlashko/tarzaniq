@@ -15,7 +15,7 @@ from pathlib import Path
 
 from . import config
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -34,6 +34,9 @@ CREATE TABLE IF NOT EXISTS days (
     params_json TEXT NOT NULL,       -- engagement params used
     app_version TEXT,
     committed_at TEXT,
+    processing_fingerprint TEXT,
+    fp_components TEXT,
+    has_archive INTEGER DEFAULT 0,
     UNIQUE(date, place, employee)
 );
 CREATE TABLE IF NOT EXISTS photos (
@@ -96,13 +99,42 @@ def connect():
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA foreign_keys=ON")
     con.executescript(_SCHEMA)
-    cur = con.execute("SELECT value FROM meta WHERE key='schema_version'")
-    row = cur.fetchone()
+    _migrate(con)
+    return con
+
+
+def _has_archive_for(folder_name: str) -> bool:
+    from . import archive  # lazy: keeps db's top-level import light
+    return archive.read_manifest(folder_name) is not None
+
+
+def _migrate(con):
+    """Bring an older DB up to SCHEMA_VERSION. Idempotent + additive."""
+    row = con.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
     if row is None:
         con.execute("INSERT INTO meta(key,value) VALUES('schema_version',?)",
                     (str(SCHEMA_VERSION),))
         con.commit()
-    return con
+        return
+    ver = int(row["value"])
+    if ver >= 2:
+        return
+    # v1 -> v2: add fingerprint/archive columns (guarded), backfill has_archive
+    cols = {r["name"] for r in con.execute("PRAGMA table_info(days)")}
+    if "processing_fingerprint" not in cols:
+        con.execute("ALTER TABLE days ADD COLUMN processing_fingerprint TEXT")
+    if "fp_components" not in cols:
+        con.execute("ALTER TABLE days ADD COLUMN fp_components TEXT")
+    if "has_archive" not in cols:
+        con.execute("ALTER TABLE days ADD COLUMN has_archive INTEGER DEFAULT 0")
+    for r in con.execute("SELECT id, source_folder, date, place, employee FROM days"):
+        from pathlib import Path as _P
+        folder = _P(r["source_folder"]).name if r["source_folder"] \
+            else f"{r['date']}.{r['place']}.{r['employee']}"
+        con.execute("UPDATE days SET has_archive=? WHERE id=?",
+                    (1 if _has_archive_for(folder) else 0, r["id"]))
+    con.execute("UPDATE meta SET value='2' WHERE key='schema_version'")
+    con.commit()
 
 
 def backup_if_due():
