@@ -118,6 +118,13 @@ check("comparability route shape",
       and "by_route" in j, str(j))
 s, j = post("/api/bring-current", {})
 check("bring-current ok", s == 200 and j.get("ok") is True, str(j))
+try:
+    s, j = get("/api/compare/Marko/Ana")
+    check("compare route shape (or 404 if seed lacks them)",
+          (isinstance(j, dict) and ("test" in j or "error" in j)), str(j))
+except urllib.error.HTTPError as _e:
+    check("compare route shape (or 404 if seed lacks them)", _e.code == 404,
+          f"unexpected {_e.code}")
 
 # static files exist & served
 s2 = urllib.request.urlopen(B + "/static/vendor/chart.umd.js", timeout=5)
