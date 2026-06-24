@@ -81,21 +81,28 @@ Frontend: `static/js/{app,util,charts,live,pages}.js`, `static/css/jungle.css`, 
 
 ## 5. Running & testing
 ```bash
-# venv (opencv/numpy/onnx wheels need CPython 3.11–3.12, NOT 3.14)
-python3.12 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
+# One-time setup (opencv/numpy wheels need CPython 3.11–3.12, NOT 3.14):
+python3.12 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt -r requirements-dev.txt
+npm install                                  # jsdom, for the DOM smoke test
 
-# unit + integration
-python3 tests/test_engagements.py      # 13 spec tests — pure Python, no deps
-python3 tests/test_server.py           # naming edge cases + route smokes (needs cv2)
-python3 tests/test_e2e.py              # 43 checks, synthetic day (needs numpy/cv2)
+# Run the whole suite (3 Python suites + DOM smoke), one command:
+./run_tests.sh
 
-# DOM smoke needs a live MockEngine server on a seeded DB:
-rm -rf /tmp/tq_demo && TARZANIQ_DATA=/tmp/tq_demo python3 tests/seed_demo.py
-# launch server.create(engine_factory=lambda: MockEngine({})) on port 43991, then:
-npm i jsdom && node tests/dom_smoke.mjs http://127.0.0.1:43991
+# Or individually:
+.venv/bin/python tests/test_engagements.py   # 13 engagement-spec tests (pure Python)
+.venv/bin/python tests/test_server.py        # naming edge cases + route smokes
+.venv/bin/python tests/test_e2e.py           # 43 checks, synthetic day (needs piexif)
+
+# DOM smoke = real SPA in jsdom vs a live MockEngine server on a seeded DB:
+rm -rf /tmp/tq_demo && TARZANIQ_DATA=/tmp/tq_demo .venv/bin/python tests/seed_demo.py
+TARZANIQ_DATA=/tmp/tq_demo .venv/bin/python tests/run_demo_server.py --port 43991 &
+node tests/dom_smoke.mjs http://127.0.0.1:43991
 ```
-The **MockEngine** lets the whole app run and every page render without the ONNX models —
-this is what makes the frontend testable. Keep it working.
+`requirements.txt` is the app's runtime deps; `requirements-dev.txt` adds test-only deps
+(`piexif`). `tests/run_demo_server.py` boots the app with the **MockEngine** so the whole app
+runs and every page renders **without** the ONNX models — this is what makes the frontend
+testable. Keep that property.
 
 ## 6. Current work — the two new features
 See [docs/HANDOFF.md](docs/HANDOFF.md) §6–§9. Build **A first, then B**.

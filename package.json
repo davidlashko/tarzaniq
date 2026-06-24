@@ -1,0 +1,12 @@
+{
+  "name": "tarzaniq",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Node-side test harness for the TarzanIQ SPA (jsdom DOM smoke test).",
+  "scripts": {
+    "dom-smoke": "node tests/dom_smoke.mjs"
+  },
+  "devDependencies": {
+    "jsdom": "^29.1.1"
+  }
+}
