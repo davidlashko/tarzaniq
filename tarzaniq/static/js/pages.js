@@ -678,6 +678,10 @@ const SETTING_DEFS = [
   ['face_match_threshold', 'Same-person strictness', 'Lower = stricter matching (may split one person in two), higher = looser (may merge two people).'],
   ['preview_max_width', 'Preview width (px)', 'Size of live preview frames sent to the dashboard.'],
 ];
+const ARCHIVE_DEFS = [
+  ['archive_target_kb', 'Archive photo size (KB)', 'Target file size for each compressed photo copy (~150 default).'],
+  ['archive_dir', 'Archive folder', 'Where compressed copies are kept (blank = ~/Documents/TarzanIQ Archive; can be an external drive path).'],
+];
 
 async function pageSettings() {
   let cfg, reg, cmp;
@@ -696,7 +700,13 @@ async function pageSettings() {
     return el('div', { class: 'setrow' },
       el('div', { class: 'lab' }, lab, el('small', null, help)), inp);
   });
-  const checks = ['preview_enabled', 'decode_reduced', 'sounds_enabled'].map(k => {
+  const archiveRows = ARCHIVE_DEFS.map(([k, lab, help]) => {
+    const inp = el('input', { type: 'text', value: cfg[k] ?? '' });
+    inputs[k] = inp;
+    return el('div', { class: 'setrow' },
+      el('div', { class: 'lab' }, lab, el('small', null, help)), inp);
+  });
+  const checks = ['preview_enabled', 'decode_reduced', 'sounds_enabled', 'archive_enabled'].map(k => {
     const inp = el('input', { type: 'checkbox' });
     inp.checked = !!cfg[k];
     inputs[k] = inp;
@@ -704,6 +714,7 @@ async function pageSettings() {
       preview_enabled: ['Live preview', 'Stream annotated frames to the dashboard while processing.'],
       decode_reduced: ['Fast decode', 'Read photos at half resolution — much faster, plenty for face work. Turn off only if faces are tiny.'],
       sounds_enabled: ['Sounds', 'Retro bleeps for prompts and the commit fanfare.'],
+      archive_enabled: ['Keep a compressed photo archive', 'Stores a ~150 KB JXL copy of every photo so analysis can be re-run later. Turn off to keep only the numbers.'],
     };
     return el('div', { class: 'setrow' },
       el('div', { class: 'lab' }, labels[k][0], el('small', null, labels[k][1])),
@@ -782,6 +793,7 @@ async function pageSettings() {
     el('div', { class: 'panel' },
       el('h2', null, 'Engagement rules'), rows,
       el('h2', { class: 'mt' }, 'App'), checks,
+      el('h2', { class: 'mt' }, 'Photo archive'), archiveRows,
       el('div', { class: 'btnrow mt' }, saveBtn, recomputeBtn)),
     el('div', { class: 'row' },
       el('div', { class: 'panel' }, regList('name', reg.names)),
@@ -795,5 +807,5 @@ async function pageSettings() {
       el('h2', null, 'Where things live'),
       el('p', null, 'Data folder: ', el('b', { class: 'gold' }, cfg._data_dir)),
       el('p', { class: 'small dim mt' },
-        'Holds the database, Excel exports, models, logs and weekly backups. It survives reinstalls — photos are never stored, only the numbers mined from them.')));
+        'Holds the database, Excel exports, models, logs and weekly backups. It survives reinstalls. Compressed photo copies are kept separately in the TarzanIQ Archive folder; this data folder holds only the numbers mined from your photos.')));
 }
