@@ -56,7 +56,8 @@ check("wilson trials=0 -> (0,0)", S.wilson_interval(0, 0) == (0.0, 0.0))
 lo_s, hi_s = S.wilson_interval(1, 2)
 check("wilson wider for small n", (hi_s - lo_s) > (hi - lo))
 lo0, hi0 = S.wilson_interval(0, 20)
-check("wilson all-fail stays in [0,1]", 0.0 <= lo0 <= hi0 <= 1.0 and lo0 == 0.0 or lo0 >= 0.0)
+check("wilson all-fail stays in [0,1]", 0.0 <= lo0 <= hi0 <= 1.0, f"{lo0},{hi0}")
+check("wilson all-fail low==0", lo0 == 0.0, str(lo0))
 
 # clearly different, large samples -> significant
 t = S.two_proportion_test(80, 100, 40, 100)
