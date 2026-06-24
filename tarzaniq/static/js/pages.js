@@ -39,6 +39,30 @@ async function pageOverview() {
           el('button', { class: 'btn big', onclick: addDayFlow }, '+ Add day folder')))));
   }
 
+  /* comparability banner — fetch in parallel, non-blocking */
+  let cmpBanner = '';
+  try {
+    const cmp = await API.get('/api/comparability');
+    const parts = [];
+    if (cmp.stale > 0) {
+      const br = cmp.by_route || {};
+      const detail = [br.reprocess > 0 ? `${br.reprocess} reprocessing` : '',
+                      br.recompute > 0 ? `${br.recompute} recomputing`  : '']
+        .filter(Boolean).join(', ');
+      parts.push(el('span', null,
+        el('span', { class: 'cmp-icon' }, '⏳ '),
+        `${cmp.stale} day${cmp.stale > 1 ? 's' : ''} catching up…`,
+        detail ? el('span', { class: 'cmp-note' }, ` (${detail})`) : ''));
+    }
+    if ((cmp.by_route || {}).legacy > 0) {
+      parts.push(el('span', { class: 'cmp-note' },
+        `${cmp.by_route.legacy} legacy day${cmp.by_route.legacy > 1 ? 's' : ''} excluded from comparisons`));
+    }
+    if (parts.length) {
+      cmpBanner = el('div', { class: 'cmp-banner' }, ...parts);
+    }
+  } catch (_) { /* banner is non-critical — ignore */ }
+
   const t = d.total;
   const totems = el('div', { class: 'totems' },
     totem(pixImg('target', 26), fmt.pct(t.conversion), 'Team conversion', 'good'),
@@ -78,6 +102,7 @@ async function pageOverview() {
       el('div', { class: 'small dim mt' }, `${r.who} · ${r.date}`))));
 
   setMain(
+    cmpBanner,
     el('div', { class: 'panel' },
       el('div', { class: 'spread' },
         el('h2', null, 'The whole jungle'),
@@ -478,10 +503,27 @@ async function pagePatterns() {
 
 /* ================================================== DAY DETAIL */
 async function pageDay(id) {
-  let d;
-  try { d = await API.get('/api/day/' + id); }
+  let d, cmp;
+  try {
+    [d, cmp] = await Promise.all([
+      API.get('/api/day/' + id),
+      API.get('/api/comparability').catch(() => null),
+    ]);
+  }
   catch (e) { return setMain(errPanel(e)); }
   const st = d.stats, day = d.day;
+
+  /* comparability pills */
+  const dayFp = day.processing_fingerprint;
+  const curFp = cmp && cmp.current_fingerprint;
+  const isBehind = dayFp && curFp && dayFp !== curFp;
+  const isLegacy = isBehind && !day.has_archive;
+  const dayPills = [];
+  if (isLegacy) {
+    dayPills.push(el('span', { class: 'badge badge-legacy', title: 'No archive — cannot be reprocessed; excluded from comparisons' }, 'legacy'));
+  } else if (isBehind) {
+    dayPills.push(el('span', { class: 'badge badge-catchup', title: 'Queued to catch up to the current processing fingerprint' }, 'catching up'));
+  }
 
   const totems = el('div', { class: 'totems' },
     totem('', fmt.pct(st.conversion), 'Conversion', 'good'),
@@ -579,7 +621,8 @@ async function pageDay(id) {
       el('div', { class: 'spread' },
         el('h2', null, `${day.date} · ${day.place} · `,
           el('a', { href: '#/ape/' + encodeURIComponent(day.employee) }, day.employee)),
-        el('span', { class: 'dim small' }, day.weekday)),
+        el('div', { class: 'btnrow' }, ...dayPills,
+          el('span', { class: 'dim small' }, day.weekday))),
       totems),
     el('div', { class: 'panel' }, el('h2', null, 'The day, on one vine'), tl,
       el('div', { class: 'legend mt' },
@@ -619,9 +662,13 @@ const SETTING_DEFS = [
 ];
 
 async function pageSettings() {
-  let cfg, reg;
+  let cfg, reg, cmp;
   try {
-    [cfg, reg] = await Promise.all([API.get('/api/settings'), API.get('/api/registry')]);
+    [cfg, reg, cmp] = await Promise.all([
+      API.get('/api/settings'),
+      API.get('/api/registry'),
+      API.get('/api/comparability').catch(() => null),
+    ]);
   } catch (e) { return setMain(errPanel(e)); }
 
   const inputs = {};
@@ -651,7 +698,7 @@ async function pageSettings() {
       body[k] = inp.type === 'checkbox' ? inp.checked : inp.value;
     const r = await API.post('/api/settings', body);
     Sfx.enabled = !!r.sounds_enabled;
-    toast('Settings saved. Old days keep their numbers until you recompute.');
+    toast('Settings saved. Stale days are brought up to date automatically in the background.');
     Sfx.blip();
   } }, 'Save settings');
 
@@ -689,6 +736,30 @@ async function pageSettings() {
     bad.slice(0, 3).forEach(x => toast(`${x.file}: ${x.error}`, true));
   } }, 'Import');
 
+  /* comparability section */
+  const cmpSection = el('div', { class: 'panel' },
+    el('h2', null, 'Comparability'),
+    el('div', { class: 'setrow' },
+      el('div', { class: 'lab' }, 'Processing fingerprint',
+        el('small', null, 'Encodes the model + algorithm versions in use. Days with a matching fingerprint are directly comparable.')),
+      el('span', { class: 'gold small' }, (cmp && cmp.current_fingerprint) || '–')),
+    el('div', { class: 'setrow' },
+      el('div', { class: 'lab' }, 'Days catching up',
+        el('small', null, 'Days whose fingerprint differs from the current one. TarzanIQ auto-recomputes cheap changes; expensive reprocessing is queued when you confirm.')),
+      el('span', { class: 'gold small' }, cmp ? String(cmp.stale) : '–')),
+    (cmp && (cmp.by_route || {}).legacy > 0)
+      ? el('p', { class: 'small dim mt' },
+          `${cmp.by_route.legacy} legacy day${cmp.by_route.legacy > 1 ? 's' : ''} have no archive and are excluded from comparisons until reprocessed from original photos.`)
+      : '',
+    el('div', { class: 'btnrow mt' },
+      el('button', { class: 'btn bark', onclick: async () => {
+        toast('Enqueuing all stale days…');
+        const r = await API.post('/api/bring-current', {});
+        toast(`Recomputed ${r.recomputed || 0}, queued ${r.reprocess_queued || 0} for reprocessing, ${r.legacy || 0} legacy`);
+        Sfx.blip();
+        pageSettings();
+      } }, 'Bring everything up to date')));
+
   setMain(
     el('div', { class: 'panel' },
       el('h2', null, 'Engagement rules'), rows,
@@ -701,6 +772,7 @@ async function pageSettings() {
       el('h2', null, 'Rebuild from Excel exports'),
       el('p', { class: 'small dim' }, 'Lost the database? Every export carries the full day inside it. Point at a folder of TarzanIQ .xlsx files (or one file) to re-import.'),
       el('div', { class: 'btnrow mt' }, impPath, impBtn)),
+    cmpSection,
     el('div', { class: 'panel bark' },
       el('h2', null, 'Where things live'),
       el('p', null, 'Data folder: ', el('b', { class: 'gold' }, cfg._data_dir)),

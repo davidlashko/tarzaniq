@@ -362,7 +362,8 @@ def day_detail(con, day_id):
     return {"day": {k: d[k] for k in ("id", "date", "weekday", "place",
                                       "employee", "money_cash", "money_card",
                                       "source_folder", "committed_at",
-                                      "app_version")},
+                                      "app_version", "processing_fingerprint",
+                                      "has_archive")},
             "stats": st, "blocks": blocks,
             "subjects": subs,
             "params": json.loads(d["params_json"])}
