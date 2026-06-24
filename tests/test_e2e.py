@@ -263,6 +263,17 @@ check("patterns hours", any(h["hour"] == 10 for h in pat["hours"]))
 day_d = agg.day_detail(con2, day_id)
 check("day detail blocks", len(day_d["blocks"]) > 0)
 
+# ---- Feature C: conversion CI + compare significance ----
+_sums = agg.employee_summaries(db.all_days(con2))
+_one = next(iter(_sums.values()))
+check("summary has conversion_ci", isinstance(_one.get("conversion_ci"), tuple)
+      and len(_one["conversion_ci"]) == 2, str(_one.get("conversion_ci")))
+_cmp = agg.compare_significance(con2, "Marko", "Petar")
+check("compare_significance shape", _cmp is not None and "test" in _cmp
+      and "significant" in _cmp["test"] and "a_ci" in _cmp and "b_ci" in _cmp, str(_cmp))
+check("compare missing employee -> None",
+      agg.compare_significance(con2, "Marko", "NoSuchApe") is None)
+
 con.close(); con2.close()
 print("ALL GREEN" if not fails else f"{len(fails)} FAILURES: {fails}")
 sys.exit(1 if fails else 0)

@@ -292,13 +292,30 @@ function demoCharts(gcv, acv, demo) {
 }
 
 /* ================================================== COMPARE */
+function sigLine(sig, a, b) {
+  if (!sig || !sig.test) return '';
+  const pct = v => (v == null ? '—' : Math.round(v * 100) + '%');
+  const ci = c => c ? ` (${Math.round(c[0]*100)}–${Math.round(c[1]*100)}%)` : '';
+  const t = sig.test;
+  const leader = t.diff >= 0 ? a : b;
+  let verdict, cls;
+  if (!t.enough_data) { verdict = 'Not enough data yet to call it (need ≥30 approaches each)'; cls = 'air'; }
+  else if (t.significant) { verdict = `${leader} is ahead — statistically significant (p = ${t.p_value.toFixed(2)})`; cls = 'warm'; }
+  else { verdict = `Not statistically significant (p = ${t.p_value.toFixed(2)})`; cls = 'air'; }
+  return el('div', { class: 'sig' },
+    el('div', { class: 'sigrates' },
+      `${a} ${pct(sig.a_conv)}${ci(sig.a_ci)}  ·  ${b} ${pct(sig.b_conv)}${ci(sig.b_ci)}`),
+    el('span', { class: 'badge badge-' + cls }, verdict));
+}
+
 async function pageCompare(a, b) {
-  let A, B;
+  let A, B, sig;
   try {
     [A, B] = await Promise.all([
       API.get('/api/employee/' + encodeURIComponent(a)),
       API.get('/api/employee/' + encodeURIComponent(b))]);
   } catch (e) { return setMain(errPanel(e)); }
+  sig = await API.get('/api/compare/' + encodeURIComponent(a) + '/' + encodeURIComponent(b)).catch(() => null);
 
   const { box: rbox, cv: rcv } = chartBox(true);
   const { box: mbox, cv: mcv } = chartBox(true);
@@ -315,7 +332,8 @@ async function pageCompare(a, b) {
       el('div', { class: 'panel' }, el('h2', null, 'Head to head'), mbox,
         el('div', { class: 'legend' },
           el('span', null, el('span', { class: 'key', style: 'background:' + C.banana }), a),
-          el('span', null, el('span', { class: 'key', style: 'background:' + C.warm }), b)))));
+          el('span', null, el('span', { class: 'key', style: 'background:' + C.warm }), b)),
+        sigLine(sig, a, b))));
 
   radarChart(rcv, AXES.map(x => x[1]), [
     radarDs(a, AXES.map(x => (A.percentiles || {})[x[0]] ?? 0), C.banana, '38'),

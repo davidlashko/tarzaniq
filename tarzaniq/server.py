@@ -172,6 +172,18 @@ def api_employee(name):
         con.close()
 
 
+@app.route("/api/compare/<a>/<b>")
+def api_compare(a, b):
+    con = db.connect()
+    try:
+        out = agg.compare_significance(con, a, b)
+        if out is None:
+            return jsonify({"error": "not found"}), 404
+        return jsonify(out)
+    finally:
+        con.close()
+
+
 @app.route("/api/places")
 def api_places():
     con = db.connect()
