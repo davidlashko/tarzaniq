@@ -17,6 +17,7 @@ the loop between photos.
 
 import base64
 import json
+import logging
 import queue as queue_mod
 import shutil
 import subprocess
@@ -29,7 +30,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from . import APP_VERSION, config, db, naming, exifutil, archive
+from . import APP_VERSION, config, db, naming, exifutil, archive, fingerprint
 from .engagements import Engager, analyze
 from .engine import FaceEngine, SubjectTracker, annotate_preview
 from .excelio import export_day
@@ -404,7 +405,7 @@ class AppState:
             date_iso, job.date.strftime("%A"), job.place, job.employee,
             str(job.folder), money_cash, money_card, stats,
             config.engagement_params(cfg), photo_records, eng_final,
-            subj_meta)
+            subj_meta, has_archive=bool(do_archive and archive_entries))
         day_id = db.commit_day(con, day_record)
         job.result_day_id = day_id
 
@@ -443,6 +444,14 @@ class AppState:
                                    cancel_check=lambda: job.cancel,
                                    pause_wait=self.run_flag.wait)
         except FileNotFoundError as e:
+            # has_archive said 1 but the archive is gone: reconcile so the day
+            # becomes legacy (excluded) instead of re-queuing a doomed reprocess.
+            try:
+                db.set_day_archive_flag(con, job.day_id, False)
+            except Exception:
+                pass
+            logging.getLogger("tarzaniq.pipeline").warning(
+                "reprocess: archive missing for day %s: %s", job.day_id, e)
             job.status, job.message = "error", str(e)
             return
         if result is None:
@@ -509,7 +518,7 @@ def analyze_frame(engine, tracker, engager, idx, rec, img, flags):
 
 def build_day_record(date_iso, weekday, place, employee, source_folder,
                      cash, card, stats, params, photo_records, eng_final,
-                     subj_meta):
+                     subj_meta, has_archive=False):
     photos_out = [{**p, "t": p["t"].isoformat()} for p in photo_records]
     subjects_out = []
     for sid, s in sorted(eng_final["subjects"].items()):
@@ -543,12 +552,15 @@ def build_day_record(date_iso, weekday, place, employee, source_folder,
             "end": w["end"].isoformat(), "duration_s": w["duration_s"],
             "members": w["subject"], "n_members": 1, "n_converted": None,
             "photos": w["photos"], "poses": w["poses"], "reapproach": False})
+    comp = fingerprint.current()
     return {"date": date_iso, "weekday": weekday, "place": place,
             "employee": employee, "source_folder": source_folder,
             "money_cash": cash, "money_card": card, "stats": stats,
             "params": params, "photos": photos_out,
             "subjects": subjects_out, "engagements": engagements_out,
-            "app_version": APP_VERSION}
+            "app_version": APP_VERSION,
+            "processing_fingerprint": fingerprint.fingerprint(comp),
+            "fp_components": comp, "has_archive": bool(has_archive)}
 
 
 # ------------------------------------------------------------------ recompute
@@ -600,9 +612,12 @@ def recompute_day(con, day_id, params):
     rec = build_day_record(drow["date"], drow["weekday"], drow["place"],
                            drow["employee"], drow["source_folder"],
                            drow["money_cash"], drow["money_card"], stats,
-                           params, photo_records, eng_final, subj_meta)
+                           params, photo_records, eng_final, subj_meta,
+                           has_archive=bool(drow["has_archive"]))
     db.replace_day_analysis(con, day_id, stats, params, kinds_by_pid,
-                            rec["subjects"], rec["engagements"])
+                            rec["subjects"], rec["engagements"],
+                            processing_fingerprint=rec["processing_fingerprint"],
+                            fp_components=rec["fp_components"])
 
     # refresh the Excel export so the archive matches the dataset
     folder_name = Path(drow["source_folder"]).name if drow["source_folder"] \
@@ -612,6 +627,45 @@ def recompute_day(con, day_id, params):
     except Exception:
         pass
     return stats
+
+
+# ------------------------------------------------------------------ comparability
+
+def bring_current(state, con, enqueue_reprocess=True):
+    """Route every stale day to the cheapest valid path so the dataset
+    converges to one current fingerprint. Cheap recomputes always run inline
+    (and re-stamp). Reprocess-class days are queued on the worker only when
+    enqueue_reprocess is True (the settings-save preview passes False so it can
+    prompt before launching hours of work). Photo-less model/detection-behind
+    days are left legacy (excluded by agg)."""
+    cur = fingerprint.current()
+    cur_fp = fingerprint.fingerprint(cur)
+    params = config.engagement_params(config.load_config())
+    out = {"recomputed": 0, "reprocess_queued": 0, "reprocess_pending": 0,
+           "legacy": 0, "current": 0}
+    reprocess_ids = []
+    for d in db.stale_days(con, cur_fp):
+        stored = json.loads(d["fp_components"]) if d["fp_components"] else None
+        decision = fingerprint.route(stored, cur, bool(d["has_archive"]))
+        if decision == "recompute":
+            try:
+                recompute_day(con, d["id"], params)
+                out["recomputed"] += 1
+            except Exception:
+                logging.getLogger("tarzaniq.pipeline").exception(
+                    "bring_current: recompute failed for day %s", d["id"])
+        elif decision == "reprocess":
+            reprocess_ids.append(d["id"])
+        elif decision == "legacy":
+            out["legacy"] += 1
+        else:
+            out["current"] += 1
+    if reprocess_ids and enqueue_reprocess:
+        state.enqueue_reprocess(reprocess_ids)
+        out["reprocess_queued"] = len(reprocess_ids)
+    else:
+        out["reprocess_pending"] = len(reprocess_ids)
+    return out
 
 
 # ------------------------------------------------------------------ reprocess
@@ -678,7 +732,8 @@ def reprocess_day(con, day_id, engine, cfg, progress=None, cancel_check=None,
     rec_out = build_day_record(
         drow["date"], drow["weekday"], drow["place"], drow["employee"],
         drow["source_folder"], drow["money_cash"], drow["money_card"], stats,
-        config.engagement_params(cfg), photo_records, eng_final, subj_meta)
+        config.engagement_params(cfg), photo_records, eng_final, subj_meta,
+        has_archive=True)
     new_id = db.commit_day(con, rec_out)
     try:
         export_day(rec_out, config.exports_dir() / f"{folder_name}.xlsx")

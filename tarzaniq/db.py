@@ -15,7 +15,7 @@ from pathlib import Path
 
 from . import config
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -34,6 +34,9 @@ CREATE TABLE IF NOT EXISTS days (
     params_json TEXT NOT NULL,       -- engagement params used
     app_version TEXT,
     committed_at TEXT,
+    processing_fingerprint TEXT,
+    fp_components TEXT,
+    has_archive INTEGER DEFAULT 0,
     UNIQUE(date, place, employee)
 );
 CREATE TABLE IF NOT EXISTS photos (
@@ -96,13 +99,41 @@ def connect():
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA foreign_keys=ON")
     con.executescript(_SCHEMA)
-    cur = con.execute("SELECT value FROM meta WHERE key='schema_version'")
-    row = cur.fetchone()
+    _migrate(con)
+    return con
+
+
+def _has_archive_for(folder_name: str) -> bool:
+    from . import archive  # lazy: keeps db's top-level import light
+    return archive.read_manifest(folder_name) is not None
+
+
+def _migrate(con):
+    """Bring an older DB up to SCHEMA_VERSION. Idempotent + additive."""
+    row = con.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
     if row is None:
         con.execute("INSERT INTO meta(key,value) VALUES('schema_version',?)",
                     (str(SCHEMA_VERSION),))
         con.commit()
-    return con
+        return
+    ver = int(row["value"])
+    if ver >= 2:
+        return
+    # v1 -> v2: add fingerprint/archive columns (guarded), backfill has_archive
+    cols = {r["name"] for r in con.execute("PRAGMA table_info(days)")}
+    if "processing_fingerprint" not in cols:
+        con.execute("ALTER TABLE days ADD COLUMN processing_fingerprint TEXT")
+    if "fp_components" not in cols:
+        con.execute("ALTER TABLE days ADD COLUMN fp_components TEXT")
+    if "has_archive" not in cols:
+        con.execute("ALTER TABLE days ADD COLUMN has_archive INTEGER DEFAULT 0")
+    for r in con.execute("SELECT id, source_folder, date, place, employee FROM days"):
+        folder = Path(r["source_folder"]).name if r["source_folder"] \
+            else f"{r['date']}.{r['place']}.{r['employee']}"
+        con.execute("UPDATE days SET has_archive=? WHERE id=?",
+                    (1 if _has_archive_for(folder) else 0, r["id"]))
+    con.execute("UPDATE meta SET value='2' WHERE key='schema_version'")
+    con.commit()
 
 
 def backup_if_due():
@@ -191,14 +222,19 @@ def commit_day(con, day_record):
     existing = find_day(con, d["date"], d["place"], d["employee"])
     if existing:
         con.execute("DELETE FROM days WHERE id=?", (existing,))
+    fp_comp = d.get("fp_components")
     cur = con.execute(
         "INSERT INTO days(date, weekday, place, employee, source_folder, "
         "money_cash, money_card, stats_json, params_json, app_version, "
-        "committed_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+        "committed_at, processing_fingerprint, fp_components, has_archive) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (d["date"], d["weekday"], d["place"], d["employee"],
          d.get("source_folder"), d.get("money_cash"), d.get("money_card"),
          json.dumps(d["stats"]), json.dumps(d["params"]),
-         d.get("app_version"), datetime.now().isoformat()))
+         d.get("app_version"), datetime.now().isoformat(),
+         d.get("processing_fingerprint"),
+         json.dumps(fp_comp) if fp_comp is not None else None,
+         1 if d.get("has_archive") else 0))
     day_id = cur.lastrowid
 
     con.executemany(
@@ -246,6 +282,12 @@ def update_money(con, day_id, cash, card):
     con.commit()
 
 
+def set_day_archive_flag(con, day_id, has_archive):
+    con.execute("UPDATE days SET has_archive=? WHERE id=?",
+                (1 if has_archive else 0, day_id))
+    con.commit()
+
+
 # ---------------------------------------------------------------- queries
 
 def day_row(con, day_id):
@@ -268,6 +310,13 @@ def all_days(con, employee=None, place=None, date_from=None, date_to=None):
     return [dict(r) for r in con.execute(q, args)]
 
 
+def stale_days(con, current_fp):
+    """Days whose stored fingerprint != the current one (NULL counts as stale)."""
+    return [dict(r) for r in con.execute(
+        "SELECT * FROM days WHERE processing_fingerprint IS NULL "
+        "OR processing_fingerprint != ? ORDER BY date ASC", (current_fp,))]
+
+
 def day_photos(con, day_id):
     return [dict(r) for r in con.execute(
         "SELECT * FROM photos WHERE day_id=? ORDER BY t ASC, seq ASC",
@@ -287,11 +336,16 @@ def day_engagements(con, day_id):
 
 
 def replace_day_analysis(con, day_id, stats, params, photos_kinds,
-                         subjects, engagements):
+                         subjects, engagements,
+                         processing_fingerprint=None, fp_components=None):
     """Used by recompute: update analysis results in place, keep photos
     rows (only their kind changes) and money."""
-    con.execute("UPDATE days SET stats_json=?, params_json=? WHERE id=?",
-                (json.dumps(stats), json.dumps(params), day_id))
+    con.execute("UPDATE days SET stats_json=?, params_json=?, "
+                "processing_fingerprint=COALESCE(?, processing_fingerprint), "
+                "fp_components=COALESCE(?, fp_components) WHERE id=?",
+                (json.dumps(stats), json.dumps(params), processing_fingerprint,
+                 json.dumps(fp_components) if fp_components is not None else None,
+                 day_id))
     for pid, kind in photos_kinds:
         con.execute("UPDATE photos SET kind=? WHERE id=?", (kind, pid))
     con.execute("DELETE FROM subjects WHERE day_id=?", (day_id,))

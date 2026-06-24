@@ -14,8 +14,8 @@ from flask import (Flask, Response, jsonify, request, send_file,
                    send_from_directory)
 
 from . import APP_NAME, APP_VERSION, APP_CODENAME, DEFAULT_PORT, config, db
-from . import agg
-from .pipeline import AppState, recompute_day
+from . import agg, fingerprint
+from .pipeline import AppState, recompute_day, bring_current
 
 STATIC = Path(__file__).parent / "static"
 
@@ -291,6 +291,20 @@ def api_settings():
                     pass
         config.save_config(cfg)
         state.reload_config()
+        # Feature B (smart auto): run the cheap path now; do NOT enqueue the
+        # expensive reprocess — report how many days WOULD need it so the UI can
+        # prompt the user, who then confirms via POST /api/bring-current.
+        con = db.connect()
+        try:
+            res = bring_current(state, con, enqueue_reprocess=False)
+        finally:
+            con.close()
+        out = dict(config.load_config())
+        out["_data_dir"] = str(config.data_dir())
+        out["comparability"] = {"recomputed": res["recomputed"],
+                                "reprocess_pending": res["reprocess_pending"],
+                                "legacy": res["legacy"]}
+        return jsonify(out)
     out = dict(config.load_config())
     out["_data_dir"] = str(config.data_dir())
     return jsonify(out)
@@ -341,6 +355,35 @@ def api_recompute():
             except Exception:
                 pass
         return jsonify({"ok": True, "recomputed": done})
+    finally:
+        con.close()
+
+
+@app.route("/api/bring-current", methods=["POST"])
+def api_bring_current():
+    con = db.connect()
+    try:
+        res = bring_current(state, con)
+    finally:
+        con.close()
+    return jsonify({"ok": True, **res})
+
+
+@app.route("/api/comparability")
+def api_comparability():
+    con = db.connect()
+    try:
+        cur = fingerprint.current()
+        cur_fp = fingerprint.fingerprint(cur)
+        stale = db.stale_days(con, cur_fp)
+        by = {"recompute": 0, "reprocess": 0, "legacy": 0}
+        for d in stale:
+            stored = json.loads(d["fp_components"]) if d["fp_components"] else None
+            r = fingerprint.route(stored, cur, bool(d["has_archive"]))
+            if r in by:
+                by[r] += 1
+        return jsonify({"current_fingerprint": cur_fp,
+                        "stale": len(stale), "by_route": by})
     finally:
         con.close()
 

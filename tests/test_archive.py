@@ -233,5 +233,83 @@ check("reprocess cancel returns None", _res is None)
 check("reprocess cancel committed nothing new", len(db.all_days(_con)) == _before)
 _con.close()
 
+# ---- Feature B: bring_current routes stale days ----
+from tarzaniq import fingerprint as _fpb  # noqa: E402
+from tarzaniq.pipeline import bring_current  # noqa: E402
+
+con = db.connect()
+# everything currently committed should be current
+cur_fp = _fpb.fingerprint(_fpb.current())
+check("no stale days initially", len(db.stale_days(con, cur_fp)) == 0,
+      str([d["date"] for d in db.stale_days(con, cur_fp)]))
+
+# change a FACE param in config -> Ana (has archive) should route to reprocess
+_c = config.load_config(); _c["min_face_frac"] = _c["min_face_frac"] + 0.01
+config.save_config(_c)
+new_fp = _fpb.fingerprint(_fpb.current())
+stale = db.stale_days(con, new_fp)
+check("face change makes days stale", len(stale) >= 1)
+res = bring_current(st, con)
+check("bring_current queued a reprocess for the archived day", res["reprocess_queued"] >= 1, str(res))
+con.close()
+
+# restore config so later/other runs aren't affected
+_c2 = config.load_config(); _c2["min_face_frac"] = _c2["min_face_frac"] - 0.01
+config.save_config(_c2)
+
+# ---- Feature B: legacy (photo-less, model-behind) days are excluded from comparisons ----
+import json as _json3  # noqa: E402
+from tarzaniq import agg as _agg  # noqa: E402
+con = db.connect()
+days_before = _agg.overview(con)["total"]["days"]
+all_before = len(db.all_days(con))
+# Insert a photo-less day with a stale detection fingerprint and no archive.
+_stale_comp = dict(_fpb.current()); _stale_comp["detection_fp"] = "deadbeef0000"
+con.execute("INSERT INTO days(date,weekday,place,employee,source_folder,"
+            "stats_json,params_json,app_version,committed_at,"
+            "processing_fingerprint,fp_components,has_archive) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            ("2020-01-01", "Wednesday", "OldBazaar", "LegacyAnn", None,
+             _json3.dumps({"conversion": 0.5, "cold_persons": 2, "warm_persons": 1,
+                           "photos_total": 5, "shoot_s": 100.0, "span_s": 200.0,
+                           "weekday": "Wednesday", "cold_events": 1,
+                           "warm_dur_avg_s": 1.0, "pitch_avg_s": 1.0, "poses_avg": 1.0,
+                           "hot_streak": 1, "suspected_deletions": 0, "hourly": [],
+                           "gender_count": {}, "gender_warm": {}, "age_count": {}, "age_warm": {}}),
+             "{}", "1.0.0", "2020-01-01T00:00:00",
+             _fpb.fingerprint(_stale_comp), _json3.dumps(_stale_comp), 0))
+con.commit()
+ov = _agg.overview(con)
+check("legacy day excluded from overview totals (count unchanged)",
+      ov["total"]["days"] == days_before, f"{days_before} -> {ov['total']['days']}")
+check("legacy employee absent from leaderboard",
+      all(s["employee"] != "LegacyAnn" for s in ov["leaderboard"]))
+# but it IS still listed by db.all_days (viewable), so the row really exists
+check("legacy day still listed by all_days",
+      len(db.all_days(con)) == all_before + 1
+      and "2020-01-01" in [d["date"] for d in db.all_days(con)])
+con.close()
+
+# ---- FIX: missing archive reconciles has_archive (no permanent stale/re-queue) ----
+import shutil as _shutil  # noqa: E402
+from tarzaniq.pipeline import reprocess_day as _rpd  # noqa: E402
+con = db.connect()
+_ana = [d for d in db.all_days(con) if d["employee"] == "Ana"][0]
+# wipe the archive dir for this day so reprocess can't find a manifest
+_adir = archive.day_archive_dir("26.06.11.OldBazaar.Ana")
+if _adir.exists():
+    _shutil.rmtree(_adir)
+_raised = False
+try:
+    _rpd(con, _ana["id"], MockEngine({}), config.load_config())
+except FileNotFoundError:
+    _raised = True
+check("reprocess_day raises when archive is gone", _raised)
+# the worker's _run_reprocess catches it and reconciles has_archive -> 0; emulate that call path:
+db.set_day_archive_flag(con, _ana["id"], False)
+_after = db.day_row(con, _ana["id"])
+check("missing-archive day reconciled to has_archive=0", _after["has_archive"] == 0)
+con.close()
+
 print("ALL GREEN" if not fails else f"{len(fails)} FAILURES: {fails}")
 sys.exit(1 if fails else 0)

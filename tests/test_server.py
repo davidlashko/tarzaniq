@@ -112,6 +112,12 @@ s, j = get("/api/places")
 check("places empty", s == 200 and j["places"] == [])
 s, j = post("/api/reprocess", {"day_id": 999999})
 check("reprocess route ok", s == 200 and j["ok"] is True)
+s, j = get("/api/comparability")
+check("comparability route shape",
+      s == 200 and "current_fingerprint" in j and "stale" in j
+      and "by_route" in j, str(j))
+s, j = post("/api/bring-current", {})
+check("bring-current ok", s == 200 and j.get("ok") is True, str(j))
 
 # static files exist & served
 s2 = urllib.request.urlopen(B + "/static/vendor/chart.umd.js", timeout=5)
