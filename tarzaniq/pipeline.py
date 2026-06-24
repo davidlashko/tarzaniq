@@ -23,12 +23,13 @@ import subprocess
 import threading
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, date
 from pathlib import Path
 
 import cv2
+import numpy as np
 
-from . import APP_VERSION, config, db, naming, exifutil
+from . import APP_VERSION, config, db, naming, exifutil, archive
 from .engagements import Engager, analyze
 from .engine import FaceEngine, SubjectTracker, annotate_preview
 from .excelio import export_day
@@ -36,10 +37,12 @@ from .stats import compute_day_stats
 
 
 class Job:
-    def __init__(self, folder):
+    def __init__(self, folder, kind="ingest", day_id=None):
         self.id = uuid.uuid4().hex[:10]
         self.folder = Path(folder)
         self.name = self.folder.name
+        self.kind = kind            # "ingest" | "reprocess"
+        self.day_id = day_id        # set for reprocess jobs
         self.status = "queued"      # queued/scanning/processing/waiting/
                                     # committing/done/error/discarded/skipped
         self.message = ""
@@ -54,6 +57,7 @@ class Job:
 
     def brief(self):
         return {"id": self.id, "folder": str(self.folder), "name": self.name,
+                "kind": self.kind,
                 "status": self.status, "message": self.message,
                 "progress": self.progress, "total": self.total,
                 "date": str(self.date) if self.date else None,
@@ -145,6 +149,28 @@ class AppState:
         self.broadcast("queue", self.queue_brief())
         return added, errors
 
+    def enqueue_reprocess(self, day_ids):
+        added = []
+        con = db.connect()
+        try:
+            for did in day_ids:
+                drow = db.day_row(con, did)
+                if not drow:
+                    continue
+                folder_name = Path(drow["source_folder"]).name \
+                    if drow["source_folder"] \
+                    else f"{drow['date']}.{drow['place']}.{drow['employee']}"
+                j = Job(folder_name, kind="reprocess", day_id=did)
+                j.date, j.place, j.employee = \
+                    drow["date"], drow["place"], drow["employee"]
+                self.jobs.append(j)
+                self.q.put(j)
+                added.append(j.brief())
+        finally:
+            con.close()
+        self.broadcast("queue", self.queue_brief())
+        return added
+
     def queue_brief(self):
         return [j.brief() for j in self.jobs[-30:]]
 
@@ -199,7 +225,10 @@ class AppState:
             except Exception:
                 caf = None
         try:
-            self._run_job_inner(job, con, cfg)
+            if job.kind == "reprocess":
+                self._run_reprocess(job, con, cfg)
+            else:
+                self._run_job_inner(job, con, cfg)
         finally:
             if caf:
                 caf.terminate()
@@ -279,41 +308,49 @@ class AppState:
         decode_flag = (cv2.IMREAD_REDUCED_COLOR_2 if cfg.get("decode_reduced")
                        else cv2.IMREAD_COLOR)
 
+        do_archive = bool(cfg.get("archive_enabled", True))
+        arch_long = int(cfg.get("archive_long_edge", 1600))
+        arch_q = int(cfg.get("archive_quality", 80))
+        archive_entries = []
+
         for idx, rec in enumerate(scan):
             if job.cancel:
                 job.status, job.message = "discarded", "Cancelled"
                 return
             self.run_flag.wait()  # pause point
 
-            img = cv2.imread(str(rec["path"]), decode_flag)
+            raw = None
+            try:
+                raw = rec["path"].read_bytes()
+            except Exception:
+                raw = None
+            img = (cv2.imdecode(np.frombuffer(raw, np.uint8), decode_flag)
+                   if raw is not None else None)
             flags = []
             if rec["src"] in ("mtime", "none"):
                 flags.append("no_exif_time")
-            observations = []
+
+            if do_archive and img is not None and raw is not None:
+                try:
+                    jxl = archive.encode_jxl(img, arch_long, arch_q)
+                    jxl_name = Path(rec["filename"]).stem + ".jxl"
+                    adir = archive.day_archive_dir(job.name)
+                    adir.mkdir(parents=True, exist_ok=True)
+                    (adir / jxl_name).write_bytes(jxl)
+                    archive_entries.append({
+                        "original_filename": rec["filename"], "seq": rec["seq"],
+                        "exif_time": rec["t"].strftime("%H:%M:%S.%f"),
+                        "exif_source": rec["src"], "sha256": archive.sha256_bytes(raw),
+                        "jxl_filename": jxl_name, "jxl_bytes": len(jxl)})
+                except Exception:
+                    flags.append("archive_failed")
+
             if img is None:
                 flags.append("decode_failed")
-            else:
-                observations = engine.analyze(img, {"filename": rec["filename"]})
-
-            sids = []
-            for obs in observations:
-                if obs.accepted:
-                    sid = tracker.assign(obs)
-                    if sid is not None and sid not in sids:
-                        sids.append(sid)
-            live = engager.step(idx, rec["t"], sids)
-            kind = live["kind"]
-
-            detail = {"faces": [{
-                "box": list(obs.box), "score": round(obs.score, 3),
-                "blur": round(obs.blur, 1), "frac": round(obs.frac, 4),
-                "sid": obs.sid, "reject": obs.reject_reason}
-                for obs in observations], "exif_src": rec["src"]}
-            photo_records.append({
-                "filename": rec["filename"], "seq": rec["seq"], "t": rec["t"],
-                "kind": kind, "n_focus": len(sids),
-                "n_rejected": sum(1 for o in observations if not o.accepted),
-                "subjects": sids, "flags": flags, "detail": detail})
+            record, observations, live = analyze_frame(
+                engine, tracker, engager, idx, rec, img, flags)
+            kind = record["kind"]
+            photo_records.append(record)
 
             job.progress = idx + 1
             if (img is not None and cfg.get("preview_enabled")
@@ -371,11 +408,53 @@ class AppState:
         day_id = db.commit_day(con, day_record)
         job.result_day_id = day_id
 
+        if do_archive and archive_entries:
+            try:
+                archive.write_manifest(job.name, {
+                    "folder": job.name, "date": date_iso, "place": job.place,
+                    "employee": job.employee, "archive_long_edge": arch_long,
+                    "archive_target_kb": int(cfg.get("archive_target_kb", 150)),
+                    "archive_quality": arch_q, "app_version": APP_VERSION,
+                    "count": len(archive_entries),
+                    "archived_at": datetime.now().isoformat()},
+                    archive_entries)
+            except Exception:
+                pass
+
         out = config.exports_dir() / f"{job.name}.xlsx"
         export_day(day_record, out)
         job.export_path = str(out)
         job.status = "done"
         job.message = f"Saved. Excel: {out.name}"
+        self.broadcast("committed", {"job": job.brief(),
+                                     "stats": _summary_card(stats)})
+
+    def _run_reprocess(self, job, con, cfg):
+        job.status = "processing"
+        self.broadcast("queue", self.queue_brief())
+
+        def prog(i, n):
+            job.progress, job.total = i, n
+            if i % 25 == 0 or i == n:
+                self.broadcast("status", {"job": job.brief()})
+
+        try:
+            result = reprocess_day(con, job.day_id, self.engine(), cfg, progress=prog,
+                                   cancel_check=lambda: job.cancel,
+                                   pause_wait=self.run_flag.wait)
+        except FileNotFoundError as e:
+            job.status, job.message = "error", str(e)
+            return
+        if result is None:
+            if job.cancel:
+                job.status, job.message = "discarded", "Cancelled"
+            else:
+                job.status, job.message = "error", "Day not found"
+            return
+        stats, new_id = result
+        job.result_day_id = new_id
+        job.status = "done"
+        job.message = "Reprocessed from archive"
         self.broadcast("committed", {"job": job.brief(),
                                      "stats": _summary_card(stats)})
 
@@ -401,6 +480,31 @@ def _summary_card(st):
             "warm_dur_avg_s": st["warm_dur_avg_s"],
             "suspected_deletions": st["suspected_deletions"],
             "hot_streak": st["hot_streak"]}
+
+
+def analyze_frame(engine, tracker, engager, idx, rec, img, flags):
+    """Detection -> identity -> engagement for ONE decoded frame, shared by
+    ingest and reprocess. `flags` is the caller's pre-collected flag list and
+    is stored on the record as-is. Returns (photo_record, observations, live)."""
+    observations = (engine.analyze(img, {"filename": rec["filename"]})
+                    if img is not None else [])
+    sids = []
+    for obs in observations:
+        if obs.accepted:
+            sid = tracker.assign(obs)
+            if sid is not None and sid not in sids:
+                sids.append(sid)
+    live = engager.step(idx, rec["t"], sids)
+    detail = {"faces": [{
+        "box": list(obs.box), "score": round(obs.score, 3),
+        "blur": round(obs.blur, 1), "frac": round(obs.frac, 4),
+        "sid": obs.sid, "reject": obs.reject_reason}
+        for obs in observations], "exif_src": rec["src"]}
+    record = {"filename": rec["filename"], "seq": rec["seq"], "t": rec["t"],
+              "kind": live["kind"], "n_focus": len(sids),
+              "n_rejected": sum(1 for o in observations if not o.accepted),
+              "subjects": sids, "flags": flags, "detail": detail}
+    return record, observations, live
 
 
 def build_day_record(date_iso, weekday, place, employee, source_folder,
@@ -508,3 +612,76 @@ def recompute_day(con, day_id, params):
     except Exception:
         pass
     return stats
+
+
+# ------------------------------------------------------------------ reprocess
+
+def reprocess_day(con, day_id, engine, cfg, progress=None, cancel_check=None,
+                  pause_wait=None):
+    """Re-run the FULL face pipeline from the archived JXLs for one day.
+
+    Unlike recompute_day (imageless, keeps identities), this re-decodes the
+    archive and re-detects faces, so it produces fresh subject ids. Returns
+    (stats, new_day_id); None if the day is missing. Raises FileNotFoundError
+    if the day has no archive/manifest.
+    cancel_check()/pause_wait() are optional callables for cooperative
+    pause/cancel; on cancel the function returns None before committing."""
+    drow = db.day_row(con, day_id)
+    if not drow:
+        return None
+    folder_name = Path(drow["source_folder"]).name if drow["source_folder"] \
+        else f"{drow['date']}.{drow['place']}.{drow['employee']}"
+    man = archive.read_manifest(folder_name)
+    if not man:
+        raise FileNotFoundError(
+            f"No archive/manifest for day {day_id} ({folder_name})")
+
+    day = date.fromisoformat(drow["date"])
+    scan = []
+    for jxl_path, entry in archive.iter_archived(folder_name):
+        tt = datetime.strptime(entry["exif_time"], "%H:%M:%S.%f").time()
+        scan.append({"path": jxl_path, "filename": entry["original_filename"],
+                     "t": datetime.combine(day, tt), "seq": entry["seq"],
+                     "src": entry.get("exif_source", "exif")})
+    scan.sort(key=lambda r: (r["t"], r["filename"]))
+    deletions = naming.detect_deletions([(r["filename"], r["t"]) for r in scan])
+
+    tracker = SubjectTracker(cfg["face_match_threshold"])
+    engager = Engager(config.engagement_params(cfg))
+    photo_records = []
+    n = len(scan)
+    for idx, rec in enumerate(scan):
+        if pause_wait is not None:
+            pause_wait()
+        if cancel_check is not None and cancel_check():
+            return None
+        try:
+            img = archive.decode_jxl(rec["path"])
+        except Exception:
+            img = None
+        flags = [] if img is not None else ["decode_failed"]
+        if rec["src"] in ("mtime", "none"):
+            flags.append("no_exif_time")
+        record, _obs, _live = analyze_frame(
+            engine, tracker, engager, idx, rec, img, flags)
+        photo_records.append(record)
+        if progress:
+            progress(idx + 1, n)
+
+    eng_final = engager.finalize()
+    subj_meta = tracker.finalize()
+    day_info = {"date": drow["date"], "place": drow["place"],
+                "employee": drow["employee"], "weekday": drow["weekday"]}
+    old_stats = json.loads(drow["stats_json"])
+    stats = compute_day_stats(photo_records, eng_final, subj_meta, deletions,
+                              day_info, old_stats.get("skipped_files", 0), 0)
+    rec_out = build_day_record(
+        drow["date"], drow["weekday"], drow["place"], drow["employee"],
+        drow["source_folder"], drow["money_cash"], drow["money_card"], stats,
+        config.engagement_params(cfg), photo_records, eng_final, subj_meta)
+    new_id = db.commit_day(con, rec_out)
+    try:
+        export_day(rec_out, config.exports_dir() / f"{folder_name}.xlsx")
+    except Exception:
+        pass
+    return stats, new_id

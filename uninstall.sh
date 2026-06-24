@@ -19,4 +19,5 @@ rm -rf "$HOME/Library/Services/Analyze with TarzanIQ.workflow"
 echo
 echo "TarzanIQ removed."
 echo "KEPT (your analyzed days, exports, settings): $DATA"
+echo "Your photo archive (default: ~/Documents/TarzanIQ Archive, or \$TARZANIQ_ARCHIVE) is also kept."
 echo "If you truly want everything gone:  rm -rf \"$DATA\""

@@ -110,6 +110,8 @@ s, j = get("/api/patterns")
 check("patterns empty", s == 200 and j["n_days"] == 0)
 s, j = get("/api/places")
 check("places empty", s == 200 and j["places"] == [])
+s, j = post("/api/reprocess", {"day_id": 999999})
+check("reprocess route ok", s == 200 and j["ok"] is True)
 
 # static files exist & served
 s2 = urllib.request.urlopen(B + "/static/vendor/chart.umd.js", timeout=5)
