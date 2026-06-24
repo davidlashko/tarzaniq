@@ -187,7 +187,7 @@ def rename_employee(con, old, new):
     con.execute("UPDATE days SET employee=? WHERE employee=?", (new, old))
     con.execute("UPDATE days SET stats_json=REPLACE(stats_json, ?, ?) "
                 "WHERE employee=?",
-                (f'"employee": "{old}"', f'"employee": "{new}"', new))
+                (f'"employee": {json.dumps(old)}', f'"employee": {json.dumps(new)}', new))
     con.execute("DELETE FROM names WHERE name=?", (old,))
     con.commit()
 

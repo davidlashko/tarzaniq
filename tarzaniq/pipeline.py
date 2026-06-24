@@ -420,7 +420,8 @@ class AppState:
                     "archived_at": datetime.now().isoformat()},
                     archive_entries)
             except Exception:
-                pass
+                logging.getLogger("tarzaniq.pipeline").exception(
+                    "ingest: manifest write failed for %s", job.name)
 
         out = config.exports_dir() / f"{job.name}.xlsx"
         export_day(day_record, out)
@@ -518,7 +519,7 @@ def analyze_frame(engine, tracker, engager, idx, rec, img, flags):
 
 def build_day_record(date_iso, weekday, place, employee, source_folder,
                      cash, card, stats, params, photo_records, eng_final,
-                     subj_meta, has_archive=False):
+                     subj_meta, has_archive=False, fp_override=None):
     photos_out = [{**p, "t": p["t"].isoformat()} for p in photo_records]
     subjects_out = []
     for sid, s in sorted(eng_final["subjects"].items()):
@@ -552,7 +553,7 @@ def build_day_record(date_iso, weekday, place, employee, source_folder,
             "end": w["end"].isoformat(), "duration_s": w["duration_s"],
             "members": w["subject"], "n_members": 1, "n_converted": None,
             "photos": w["photos"], "poses": w["poses"], "reapproach": False})
-    comp = fingerprint.current()
+    comp = fp_override if fp_override is not None else fingerprint.current()
     return {"date": date_iso, "weekday": weekday, "place": place,
             "employee": employee, "source_folder": source_folder,
             "money_cash": cash, "money_card": card, "stats": stats,
@@ -573,6 +574,7 @@ def recompute_day(con, day_id, params):
     if not drow:
         return None
     photos = db.day_photos(con, day_id)
+    photos = sorted(photos, key=lambda p: (p["t"], p["filename"]))
     subs_meta_rows = db.day_subjects(con, day_id)
     subj_meta = {s["local_id"]: {"gender": s["gender"],
                                  "gender_conf": s["gender_conf"],
@@ -609,11 +611,18 @@ def recompute_day(con, day_id, params):
                               day_info, old_stats.get("skipped_files", 0),
                               old_stats.get("missing_exif", 0))
 
+    _stored = json.loads(drow["fp_components"]) if drow["fp_components"] else None
+    _keys = ("engagement_fp", "detection_fp", "model_version", "algo_version")
+    if _stored and all(k in _stored for k in _keys):
+        _fp_override = {**_stored, "engagement_fp": fingerprint.engagement_fp(params)}
+    else:
+        _fp_override = None  # no/partial stored fp -> adopt full current
     rec = build_day_record(drow["date"], drow["weekday"], drow["place"],
                            drow["employee"], drow["source_folder"],
                            drow["money_cash"], drow["money_card"], stats,
                            params, photo_records, eng_final, subj_meta,
-                           has_archive=bool(drow["has_archive"]))
+                           has_archive=bool(drow["has_archive"]),
+                           fp_override=_fp_override)
     db.replace_day_analysis(con, day_id, stats, params, kinds_by_pid,
                             rec["subjects"], rec["engagements"],
                             processing_fingerprint=rec["processing_fingerprint"],
@@ -728,7 +737,8 @@ def reprocess_day(con, day_id, engine, cfg, progress=None, cancel_check=None,
                 "employee": drow["employee"], "weekday": drow["weekday"]}
     old_stats = json.loads(drow["stats_json"])
     stats = compute_day_stats(photo_records, eng_final, subj_meta, deletions,
-                              day_info, old_stats.get("skipped_files", 0), 0)
+                              day_info, old_stats.get("skipped_files", 0),
+                              sum(1 for r in scan if r["src"] in ("mtime", "none")))
     rec_out = build_day_record(
         drow["date"], drow["weekday"], drow["place"], drow["employee"],
         drow["source_folder"], drow["money_cash"], drow["money_card"], stats,

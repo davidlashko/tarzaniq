@@ -29,6 +29,11 @@ def components(cfg: dict) -> dict:
     }
 
 
+def engagement_fp(params: dict) -> str:
+    """engagement_fp computed from an engagement_params dict (the 5 timing keys)."""
+    return _hash({k: params[k] for k in TIMING_KEYS})
+
+
 def current() -> dict:
     return components(config.load_config())
 

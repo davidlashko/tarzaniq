@@ -88,4 +88,4 @@ def iter_archived(folder_name: str):
         return
     d = day_archive_dir(folder_name)
     for entry in man.get("photos", []):
-        yield d / entry["jxl_filename"], entry
+        yield d / Path(entry["jxl_filename"]).name, entry
