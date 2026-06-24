@@ -1,0 +1,74 @@
+# ── TarzanIQ .gitignore ─────────────────────────────────────────────────────
+# This repo is PUBLIC. Code only — no photos, no biometric data, no models,
+# no databases, no exports. The data dir lives outside the repo
+# (~/Documents/TarzanIQ Data, override $TARZANIQ_DATA) and must never be committed.
+
+# ── macOS ──
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+
+# ── Python ──
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ── Virtual environments ──
+venv/
+.venv/
+env/
+ENV/
+
+# ── Node (tests/dom_smoke.mjs pulls jsdom ad-hoc) ──
+node_modules/
+package-lock.json
+npm-debug.log*
+yarn-error.log*
+
+# ── ONNX face/age/gender models (~83 MB, downloaded by install.sh, never shipped) ──
+*.onnx
+models/
+tarzaniq/models/
+
+# ── Runtime data, NEVER commit (the data dir survives reinstalls and is private) ──
+TarzanIQ Data/
+data/
+*.db
+*.sqlite
+*.sqlite3
+exports/
+logs/
+backups/
+*.xlsx
+
+# ── Feature A: the permanent photo archive (compressed JXLs + source photos) ──
+archive/
+*.jxl
+*.jpg
+*.jpeg
+*.JPG
+*.JPEG
+# (Pixel-art assets in tarzaniq/static/img/ are PNG and stay tracked.)
+
+# ── Claude Code: keep shared settings, ignore per-machine + local state ──
+.claude/settings.local.json
+.claude/agent-memory/*/
+.superpowers/
+
+# ── Worktrees ──
+.worktrees/
+
+# ── Editors ──
+.idea/
+.vscode/
+*.swp
