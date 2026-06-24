@@ -23,7 +23,7 @@ import subprocess
 import threading
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, date
 from pathlib import Path
 
 import cv2
@@ -555,3 +555,69 @@ def recompute_day(con, day_id, params):
     except Exception:
         pass
     return stats
+
+
+# ------------------------------------------------------------------ reprocess
+
+def reprocess_day(con, day_id, engine, cfg, progress=None):
+    """Re-run the FULL face pipeline from the archived JXLs for one day.
+
+    Unlike recompute_day (imageless, keeps identities), this re-decodes the
+    archive and re-detects faces, so it produces fresh subject ids. Returns
+    (stats, new_day_id); None if the day is missing. Raises FileNotFoundError
+    if the day has no archive/manifest."""
+    drow = db.day_row(con, day_id)
+    if not drow:
+        return None
+    folder_name = Path(drow["source_folder"]).name if drow["source_folder"] \
+        else f"{drow['date']}.{drow['place']}.{drow['employee']}"
+    man = archive.read_manifest(folder_name)
+    if not man:
+        raise FileNotFoundError(
+            f"No archive/manifest for day {day_id} ({folder_name})")
+
+    day = date.fromisoformat(drow["date"])
+    scan = []
+    for jxl_path, entry in archive.iter_archived(folder_name):
+        tt = datetime.strptime(entry["exif_time"], "%H:%M:%S.%f").time()
+        scan.append({"path": jxl_path, "filename": entry["original_filename"],
+                     "t": datetime.combine(day, tt), "seq": entry["seq"],
+                     "src": entry.get("exif_source", "exif")})
+    scan.sort(key=lambda r: (r["t"], r["filename"]))
+    deletions = naming.detect_deletions([(r["filename"], r["t"]) for r in scan])
+
+    tracker = SubjectTracker(cfg["face_match_threshold"])
+    engager = Engager(config.engagement_params(cfg))
+    photo_records = []
+    n = len(scan)
+    for idx, rec in enumerate(scan):
+        try:
+            img = archive.decode_jxl(rec["path"])
+        except Exception:
+            img = None
+        flags = [] if img is not None else ["decode_failed"]
+        if rec["src"] in ("mtime", "none"):
+            flags.append("no_exif_time")
+        record, _obs, _live = analyze_frame(
+            engine, tracker, engager, idx, rec, img, flags)
+        photo_records.append(record)
+        if progress:
+            progress(idx + 1, n)
+
+    eng_final = engager.finalize()
+    subj_meta = tracker.finalize()
+    day_info = {"date": drow["date"], "place": drow["place"],
+                "employee": drow["employee"], "weekday": drow["weekday"]}
+    old_stats = json.loads(drow["stats_json"])
+    stats = compute_day_stats(photo_records, eng_final, subj_meta, deletions,
+                              day_info, old_stats.get("skipped_files", 0), 0)
+    rec_out = build_day_record(
+        drow["date"], drow["weekday"], drow["place"], drow["employee"],
+        drow["source_folder"], drow["money_cash"], drow["money_card"], stats,
+        config.engagement_params(cfg), photo_records, eng_final, subj_meta)
+    new_id = db.commit_day(con, rec_out)
+    try:
+        export_day(rec_out, config.exports_dir() / f"{folder_name}.xlsx")
+    except Exception:
+        pass
+    return stats, new_id

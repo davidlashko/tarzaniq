@@ -178,5 +178,26 @@ _r2, _, _ = analyze_frame(MockEngine({}), _tr, _eng, 1, _rec, None, ["decode_fai
 check("analyze_frame handles img=None",
       _r2["n_focus"] == 0 and "decode_failed" in _r2["flags"])
 
+# ---- reprocess from the archive reproduces the MockEngine ingest ----
+import json as _json  # noqa: E402
+from tarzaniq.pipeline import reprocess_day  # noqa: E402
+
+con = db.connect()
+row = [d for d in db.all_days(con) if d["employee"] == "Ana"][0]
+orig = _json.loads(row["stats_json"])
+stats2, new_id = reprocess_day(con, row["id"], MockEngine(ing_manifest),
+                               config.load_config())
+check("reprocess returns stats + new id", stats2 is not None and new_id is not None)
+check("reprocess reproduces cold_persons",
+      stats2["cold_persons"] == orig["cold_persons"],
+      f"{stats2['cold_persons']} vs {orig['cold_persons']}")
+check("reprocess reproduces warm_persons",
+      stats2["warm_persons"] == orig["warm_persons"])
+check("reprocess persisted one day still",
+      len([d for d in db.all_days(con) if d["employee"] == "Ana"]) == 1)
+check("reprocess missing day -> None",
+      reprocess_day(con, 999999, MockEngine({}), config.load_config()) is None)
+con.close()
+
 print("ALL GREEN" if not fails else f"{len(fails)} FAILURES: {fails}")
 sys.exit(1 if fails else 0)
