@@ -156,5 +156,27 @@ check("jxl files on disk", (adir / "DSC0001.jxl").exists()
       and (adir / "DSC0003.jxl").exists())
 check("archived jxl decodes", archive.decode_jxl(adir / "DSC0001.jxl").ndim == 3)
 
+# ---- shared analyze_frame helper ----
+from datetime import datetime as _dt  # noqa: E402
+from tarzaniq.pipeline import analyze_frame  # noqa: E402
+from tarzaniq.engine import SubjectTracker  # noqa: E402
+from tarzaniq.engagements import Engager  # noqa: E402
+
+_tr = SubjectTracker(0.36)
+_eng = Engager(config.engagement_params(config.load_config()))
+_rec = {"filename": "DSC0001.JPG", "seq": 1,
+        "t": _dt(2026, 6, 11, 10, 0, 0), "src": "exif"}
+_img = np.zeros((240, 320, 3), dtype=np.uint8)
+_record, _obs, _live = analyze_frame(
+    MockEngine({"DSC0001.JPG": {"subjects": [0]}}), _tr, _eng, 0, _rec, _img, [])
+check("analyze_frame record subjects", _record["subjects"] == [0], str(_record))
+check("analyze_frame record seq+kind",
+      _record["seq"] == 1 and _record["kind"] in ("cold", "mixed"), str(_record))
+check("analyze_frame returns observations + live",
+      isinstance(_obs, list) and "kind" in _live)
+_r2, _, _ = analyze_frame(MockEngine({}), _tr, _eng, 1, _rec, None, ["decode_failed"])
+check("analyze_frame handles img=None",
+      _r2["n_focus"] == 0 and "decode_failed" in _r2["flags"])
+
 print("ALL GREEN" if not fails else f"{len(fails)} FAILURES: {fails}")
 sys.exit(1 if fails else 0)

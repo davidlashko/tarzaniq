@@ -317,31 +317,12 @@ class AppState:
                 except Exception:
                     flags.append("archive_failed")
 
-            observations = []
             if img is None:
                 flags.append("decode_failed")
-            else:
-                observations = engine.analyze(img, {"filename": rec["filename"]})
-
-            sids = []
-            for obs in observations:
-                if obs.accepted:
-                    sid = tracker.assign(obs)
-                    if sid is not None and sid not in sids:
-                        sids.append(sid)
-            live = engager.step(idx, rec["t"], sids)
-            kind = live["kind"]
-
-            detail = {"faces": [{
-                "box": list(obs.box), "score": round(obs.score, 3),
-                "blur": round(obs.blur, 1), "frac": round(obs.frac, 4),
-                "sid": obs.sid, "reject": obs.reject_reason}
-                for obs in observations], "exif_src": rec["src"]}
-            photo_records.append({
-                "filename": rec["filename"], "seq": rec["seq"], "t": rec["t"],
-                "kind": kind, "n_focus": len(sids),
-                "n_rejected": sum(1 for o in observations if not o.accepted),
-                "subjects": sids, "flags": flags, "detail": detail})
+            record, observations, live = analyze_frame(
+                engine, tracker, engager, idx, rec, img, flags)
+            kind = record["kind"]
+            photo_records.append(record)
 
             job.progress = idx + 1
             if (img is not None and cfg.get("preview_enabled")
@@ -442,6 +423,31 @@ def _summary_card(st):
             "warm_dur_avg_s": st["warm_dur_avg_s"],
             "suspected_deletions": st["suspected_deletions"],
             "hot_streak": st["hot_streak"]}
+
+
+def analyze_frame(engine, tracker, engager, idx, rec, img, flags):
+    """Detection -> identity -> engagement for ONE decoded frame, shared by
+    ingest and reprocess. `flags` is the caller's pre-collected flag list and
+    is stored on the record as-is. Returns (photo_record, observations, live)."""
+    observations = (engine.analyze(img, {"filename": rec["filename"]})
+                    if img is not None else [])
+    sids = []
+    for obs in observations:
+        if obs.accepted:
+            sid = tracker.assign(obs)
+            if sid is not None and sid not in sids:
+                sids.append(sid)
+    live = engager.step(idx, rec["t"], sids)
+    detail = {"faces": [{
+        "box": list(obs.box), "score": round(obs.score, 3),
+        "blur": round(obs.blur, 1), "frac": round(obs.frac, 4),
+        "sid": obs.sid, "reject": obs.reject_reason}
+        for obs in observations], "exif_src": rec["src"]}
+    record = {"filename": rec["filename"], "seq": rec["seq"], "t": rec["t"],
+              "kind": live["kind"], "n_focus": len(sids),
+              "n_rejected": sum(1 for o in observations if not o.accepted),
+              "subjects": sids, "flags": flags, "detail": detail}
+    return record, observations, live
 
 
 def build_day_record(date_iso, weekday, place, employee, source_folder,
