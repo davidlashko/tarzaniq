@@ -199,5 +199,14 @@ check("reprocess missing day -> None",
       reprocess_day(con, 999999, MockEngine({}), config.load_config()) is None)
 con.close()
 
+# ---- reprocess runs as a queued worker job ----
+con = db.connect()
+ana = [d for d in db.all_days(con) if d["employee"] == "Ana"][0]
+con.close()
+queued = st.enqueue_reprocess([ana["id"]])
+check("enqueue_reprocess accepted", len(queued) == 1)
+rj = _wait_done(queued[0]["id"])
+check("reprocess job done", rj.status == "done", rj.message)
+
 print("ALL GREEN" if not fails else f"{len(fails)} FAILURES: {fails}")
 sys.exit(1 if fails else 0)

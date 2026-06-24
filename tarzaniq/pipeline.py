@@ -37,10 +37,12 @@ from .stats import compute_day_stats
 
 
 class Job:
-    def __init__(self, folder):
+    def __init__(self, folder, kind="ingest", day_id=None):
         self.id = uuid.uuid4().hex[:10]
         self.folder = Path(folder)
         self.name = self.folder.name
+        self.kind = kind            # "ingest" | "reprocess"
+        self.day_id = day_id        # set for reprocess jobs
         self.status = "queued"      # queued/scanning/processing/waiting/
                                     # committing/done/error/discarded/skipped
         self.message = ""
@@ -55,6 +57,7 @@ class Job:
 
     def brief(self):
         return {"id": self.id, "folder": str(self.folder), "name": self.name,
+                "kind": self.kind,
                 "status": self.status, "message": self.message,
                 "progress": self.progress, "total": self.total,
                 "date": str(self.date) if self.date else None,
@@ -146,6 +149,28 @@ class AppState:
         self.broadcast("queue", self.queue_brief())
         return added, errors
 
+    def enqueue_reprocess(self, day_ids):
+        added = []
+        con = db.connect()
+        try:
+            for did in day_ids:
+                drow = db.day_row(con, did)
+                if not drow:
+                    continue
+                folder_name = Path(drow["source_folder"]).name \
+                    if drow["source_folder"] \
+                    else f"{drow['date']}.{drow['place']}.{drow['employee']}"
+                j = Job(folder_name, kind="reprocess", day_id=did)
+                j.date, j.place, j.employee = \
+                    drow["date"], drow["place"], drow["employee"]
+                self.jobs.append(j)
+                self.q.put(j)
+                added.append(j.brief())
+        finally:
+            con.close()
+        self.broadcast("queue", self.queue_brief())
+        return added
+
     def queue_brief(self):
         return [j.brief() for j in self.jobs[-30:]]
 
@@ -200,7 +225,10 @@ class AppState:
             except Exception:
                 caf = None
         try:
-            self._run_job_inner(job, con, cfg)
+            if job.kind == "reprocess":
+                self._run_reprocess(job, con, cfg)
+            else:
+                self._run_job_inner(job, con, cfg)
         finally:
             if caf:
                 caf.terminate()
@@ -398,6 +426,30 @@ class AppState:
         job.export_path = str(out)
         job.status = "done"
         job.message = f"Saved. Excel: {out.name}"
+        self.broadcast("committed", {"job": job.brief(),
+                                     "stats": _summary_card(stats)})
+
+    def _run_reprocess(self, job, con, cfg):
+        job.status = "processing"
+        self.broadcast("queue", self.queue_brief())
+
+        def prog(i, n):
+            job.progress, job.total = i, n
+            if i % 25 == 0 or i == n:
+                self.broadcast("status", {"job": job.brief()})
+
+        try:
+            result = reprocess_day(con, job.day_id, self.engine(), cfg, progress=prog)
+        except FileNotFoundError as e:
+            job.status, job.message = "error", str(e)
+            return
+        if result is None:
+            job.status, job.message = "error", "Day not found"
+            return
+        stats, new_id = result
+        job.result_day_id = new_id
+        job.status = "done"
+        job.message = "Reprocessed from archive"
         self.broadcast("committed", {"job": job.brief(),
                                      "stats": _summary_card(stats)})
 
