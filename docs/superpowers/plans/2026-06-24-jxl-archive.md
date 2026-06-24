@@ -27,7 +27,7 @@
 
 - **Create** `tarzaniq/archive.py` — codec (`encode_jxl`, `decode_jxl`), `sha256_bytes`, path helpers (`day_archive_dir`, `manifest_path`), manifest I/O (`write_manifest`, `read_manifest`, `iter_archived`).
 - **Modify** `tarzaniq/config.py` — add 5 `DEFAULTS` keys + `archive_dir()` resolver.
-- **Modify** `tarzaniq/pipeline.py` — `import numpy as np` + `from . import archive`; archive-write in the ingest loop; `reprocess_day()`; `Job.kind`/`day_id`; `enqueue_reprocess()`; reprocess worker dispatch.
+- **Modify** `tarzaniq/pipeline.py` — `import numpy as np` + `from . import archive`; archive-write in the ingest loop; extract a shared `analyze_frame()` helper; `reprocess_day()`; `Job.kind`/`day_id`; `enqueue_reprocess()`; reprocess worker dispatch.
 - **Modify** `tarzaniq/server.py` — `POST /api/reprocess`.
 - **Modify** `tarzaniq/static/js/{pages,util}.js` — a "Reprocess from archive" button on the day page.
 - **Modify** `requirements.txt` — add `pillow-jxl-plugin`.
@@ -622,17 +622,163 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 ---
 
-## Task 5: `reprocess_day()` — full pipeline from the archive
+## Task 5: Extract shared `analyze_frame` helper + refactor ingest
 
 **Files:**
-- Modify: `tarzaniq/pipeline.py` (add `reprocess_day` near `recompute_day`; `from datetime import date`)
+- Modify: `tarzaniq/pipeline.py` (add a module-level `analyze_frame`; refactor the `_run_job_inner` loop to call it)
 - Test: `tests/test_archive.py`
 
 **Interfaces:**
-- Consumes: `archive.read_manifest`, `archive.iter_archived`, `archive.decode_jxl`; `db.day_row`, `db.commit_day`; `engine.analyze`; `SubjectTracker`, `Engager`, `compute_day_stats`, `build_day_record`, `export_day`.
-- Produces: `reprocess_day(con, day_id, engine, cfg, progress=None) -> tuple[dict, int] | None` — returns `(stats, new_day_id)`, or `None` if the day is missing. Raises `FileNotFoundError` if no archive/manifest exists.
+- Consumes: `engine.analyze`, `SubjectTracker.assign`, `Engager.step`.
+- Produces: `analyze_frame(engine, tracker, engager, idx, rec, img, flags) -> tuple[dict, list, dict]` — returns `(photo_record, observations, live)`. `rec` has keys `filename`, `seq`, `t`, `src`; `flags` is the caller's pre-collected list (`no_exif_time`/`decode_failed`/`archive_failed`) and is stored on the record as-is.
 
-> **Note:** `commit_day` replaces the day by `UNIQUE(date,place,employee)`, so the row gets a **new** `id` (reprocess re-detects faces → new photo/subject rows; `replace_day_analysis` is *not* applicable). Hence the function returns the new id. With `MockEngine` the result is deterministic and must reproduce the original ingest's counts; with the real engine, lossy JXL + greedy clustering can drift (expected — formalized by Feature B).
+> **Why:** ingest (Task 4) and reprocess (Task 6) run the identical detection → identity → engagement → record-building body. Extract it once so the two paths stay in lockstep instead of duplicating a logic block. Ingest-only concerns (file read, sha256, JXL archive, preview broadcast) stay in `_run_job_inner`. This refactor is behavior-preserving — `test_e2e` is the guardrail.
+
+- [ ] **Step 1: Write the failing test**
+
+Append to `tests/test_archive.py` (before the final print/exit):
+
+```python
+# ---- shared analyze_frame helper ----
+from datetime import datetime as _dt  # noqa: E402
+from tarzaniq.pipeline import analyze_frame  # noqa: E402
+from tarzaniq.engine import SubjectTracker  # noqa: E402
+from tarzaniq.engagements import Engager  # noqa: E402
+
+_tr = SubjectTracker(0.36)
+_eng = Engager(config.engagement_params(config.load_config()))
+_rec = {"filename": "DSC0001.JPG", "seq": 1,
+        "t": _dt(2026, 6, 11, 10, 0, 0), "src": "exif"}
+_img = np.zeros((240, 320, 3), dtype=np.uint8)
+_record, _obs, _live = analyze_frame(
+    MockEngine({"DSC0001.JPG": {"subjects": [0]}}), _tr, _eng, 0, _rec, _img, [])
+check("analyze_frame record subjects", _record["subjects"] == [0], str(_record))
+check("analyze_frame record seq+kind",
+      _record["seq"] == 1 and _record["kind"] in ("cold", "mixed"), str(_record))
+check("analyze_frame returns observations + live",
+      isinstance(_obs, list) and "kind" in _live)
+_r2, _, _ = analyze_frame(MockEngine({}), _tr, _eng, 1, _rec, None, ["decode_failed"])
+check("analyze_frame handles img=None",
+      _r2["n_focus"] == 0 and "decode_failed" in _r2["flags"])
+```
+
+(`MockEngine`, `np`, `config`, `db` are already imported earlier in the file from Task 4.)
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `.venv/bin/python tests/test_archive.py`
+Expected: FAIL — `ImportError: cannot import name 'analyze_frame'`.
+
+- [ ] **Step 3: Add the helper**
+
+In `tarzaniq/pipeline.py`, add this module-level function immediately after the `_summary_card` helper (before `build_day_record`):
+
+```python
+def analyze_frame(engine, tracker, engager, idx, rec, img, flags):
+    """Detection -> identity -> engagement for ONE decoded frame, shared by
+    ingest and reprocess. `flags` is the caller's pre-collected flag list and
+    is stored on the record as-is. Returns (photo_record, observations, live)."""
+    observations = (engine.analyze(img, {"filename": rec["filename"]})
+                    if img is not None else [])
+    sids = []
+    for obs in observations:
+        if obs.accepted:
+            sid = tracker.assign(obs)
+            if sid is not None and sid not in sids:
+                sids.append(sid)
+    live = engager.step(idx, rec["t"], sids)
+    detail = {"faces": [{
+        "box": list(obs.box), "score": round(obs.score, 3),
+        "blur": round(obs.blur, 1), "frac": round(obs.frac, 4),
+        "sid": obs.sid, "reject": obs.reject_reason}
+        for obs in observations], "exif_src": rec["src"]}
+    record = {"filename": rec["filename"], "seq": rec["seq"], "t": rec["t"],
+              "kind": live["kind"], "n_focus": len(sids),
+              "n_rejected": sum(1 for o in observations if not o.accepted),
+              "subjects": sids, "flags": flags, "detail": detail}
+    return record, observations, live
+```
+
+- [ ] **Step 4: Refactor the ingest loop to call it**
+
+In `_run_job_inner`, replace this block (present after Task 4 — the analyze + record-building region):
+
+```python
+            observations = []
+            if img is None:
+                flags.append("decode_failed")
+            else:
+                observations = engine.analyze(img, {"filename": rec["filename"]})
+
+            sids = []
+            for obs in observations:
+                if obs.accepted:
+                    sid = tracker.assign(obs)
+                    if sid is not None and sid not in sids:
+                        sids.append(sid)
+            live = engager.step(idx, rec["t"], sids)
+            kind = live["kind"]
+
+            detail = {"faces": [{
+                "box": list(obs.box), "score": round(obs.score, 3),
+                "blur": round(obs.blur, 1), "frac": round(obs.frac, 4),
+                "sid": obs.sid, "reject": obs.reject_reason}
+                for obs in observations], "exif_src": rec["src"]}
+            photo_records.append({
+                "filename": rec["filename"], "seq": rec["seq"], "t": rec["t"],
+                "kind": kind, "n_focus": len(sids),
+                "n_rejected": sum(1 for o in observations if not o.accepted),
+                "subjects": sids, "flags": flags, "detail": detail})
+```
+
+with:
+
+```python
+            if img is None:
+                flags.append("decode_failed")
+            record, observations, live = analyze_frame(
+                engine, tracker, engager, idx, rec, img, flags)
+            kind = record["kind"]
+            photo_records.append(record)
+```
+
+(The preview/broadcast block below still uses `observations`, `live`, and `kind` unchanged.)
+
+- [ ] **Step 5: Run the new test and the full suite**
+
+Run: `.venv/bin/python tests/test_archive.py`
+Expected: PASS — `ALL GREEN`.
+
+Run: `.venv/bin/python tests/test_e2e.py`
+Expected: PASS (ingest stats unchanged — the refactor is behavior-preserving).
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add tarzaniq/pipeline.py tests/test_archive.py
+git commit -m "refactor(pipeline): extract analyze_frame, shared by ingest + reprocess
+
+Pull the per-frame detection -> identity -> engagement -> record body out of
+the ingest loop into a module-level analyze_frame(), so reprocess can reuse
+the exact same logic instead of duplicating it. Behavior-preserving: ingest
+stats unchanged (test_e2e green).
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+## Task 6: `reprocess_day()` — full pipeline from the archive
+
+**Files:**
+- Modify: `tarzaniq/pipeline.py` (add `reprocess_day` after `recompute_day`; extend the datetime import)
+- Test: `tests/test_archive.py`
+
+**Interfaces:**
+- Consumes: `archive.read_manifest`, `archive.iter_archived`, `archive.decode_jxl`; `analyze_frame` (Task 5); `db.day_row`, `db.commit_day`; `SubjectTracker`, `Engager`, `compute_day_stats`, `build_day_record`, `export_day`.
+- Produces: `reprocess_day(con, day_id, engine, cfg, progress=None) -> tuple[dict, int] | None` — returns `(stats, new_day_id)`, `None` if the day is missing; raises `FileNotFoundError` if there is no archive/manifest.
+
+> **Note:** `commit_day` replaces the day by `UNIQUE(date,place,employee)`, so the row gets a **new** `id` (reprocess re-detects faces → new photo/subject rows; `replace_day_analysis` is *not* applicable). Hence the function returns the new id. Under `MockEngine` the result is deterministic and reproduces the original ingest's counts; with the real engine, lossy JXL + greedy clustering can drift (expected — formalized by Feature B).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -640,44 +786,26 @@ Append to `tests/test_archive.py` (before the final print/exit). It reuses the d
 
 ```python
 # ---- reprocess from the archive reproduces the MockEngine ingest ----
+import json as _json  # noqa: E402
 from tarzaniq.pipeline import reprocess_day  # noqa: E402
 
 con = db.connect()
 row = [d for d in db.all_days(con) if d["employee"] == "Ana"][0]
-orig = __import__("json").loads(row["stats_json"])
+orig = _json.loads(row["stats_json"])
 stats2, new_id = reprocess_day(con, row["id"], MockEngine(ing_manifest),
                                config.load_config())
 check("reprocess returns stats + new id", stats2 is not None and new_id is not None)
 check("reprocess reproduces cold_persons",
-      stats2["cold_persons"] == orig["cold_persons"], f"{stats2['cold_persons']} vs {orig['cold_persons']}")
+      stats2["cold_persons"] == orig["cold_persons"],
+      f"{stats2['cold_persons']} vs {orig['cold_persons']}")
 check("reprocess reproduces warm_persons",
       stats2["warm_persons"] == orig["warm_persons"])
 check("reprocess persisted one day still",
       len([d for d in db.all_days(con) if d["employee"] == "Ana"]) == 1)
-check("reprocess no-archive raises",
-      _raises(lambda: reprocess_day(con, 999999, MockEngine({}), config.load_config())))
-con.close()
-```
-
-Also add this tiny helper near the top of `tests/test_archive.py` (after `def check`):
-
-```python
-def _raises(fn):
-    try:
-        fn()
-        return False
-    except Exception:
-        return True
-```
-
-(For a non-existent day_id `reprocess_day` returns `None` rather than raising; replace the last check with a real archived-but-missing case is overkill — instead assert `None`:)
-
-```python
 check("reprocess missing day -> None",
       reprocess_day(con, 999999, MockEngine({}), config.load_config()) is None)
+con.close()
 ```
-
-(Use this `-> None` check; drop the `_raises` helper if unused.)
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -692,7 +820,7 @@ In `tarzaniq/pipeline.py`, extend the datetime import:
 from datetime import datetime, date
 ```
 
-Add at the end of the file (after `recompute_day`):
+Add at the end of the file (after `recompute_day`). The per-frame work delegates to `analyze_frame` from Task 5:
 
 ```python
 # ------------------------------------------------------------------ reprocess
@@ -733,28 +861,12 @@ def reprocess_day(con, day_id, engine, cfg, progress=None):
             img = archive.decode_jxl(rec["path"])
         except Exception:
             img = None
-        observations = engine.analyze(img, {"filename": rec["filename"]}) \
-            if img is not None else []
-        sids = []
-        for obs in observations:
-            if obs.accepted:
-                sid = tracker.assign(obs)
-                if sid is not None and sid not in sids:
-                    sids.append(sid)
-        live = engager.step(idx, rec["t"], sids)
         flags = [] if img is not None else ["decode_failed"]
         if rec["src"] in ("mtime", "none"):
             flags.append("no_exif_time")
-        detail = {"faces": [{
-            "box": list(obs.box), "score": round(obs.score, 3),
-            "blur": round(obs.blur, 1), "frac": round(obs.frac, 4),
-            "sid": obs.sid, "reject": obs.reject_reason}
-            for obs in observations], "exif_src": rec["src"]}
-        photo_records.append({
-            "filename": rec["filename"], "seq": rec["seq"], "t": rec["t"],
-            "kind": live["kind"], "n_focus": len(sids),
-            "n_rejected": sum(1 for o in observations if not o.accepted),
-            "subjects": sids, "flags": flags, "detail": detail})
+        record, _obs, _live = analyze_frame(
+            engine, tracker, engager, idx, rec, img, flags)
+        photo_records.append(record)
         if progress:
             progress(idx + 1, n)
 
@@ -791,19 +903,18 @@ Expected: PASS.
 git add tarzaniq/pipeline.py tests/test_archive.py
 git commit -m "feat(pipeline): reprocess_day — full pipeline from the JXL archive
 
-Decode a day's archived JXLs in manifest order, re-run detection ->
-identity -> demographics -> engagement, re-derive deletions, recompute
-stats, and commit_day (full replace -> new day id). Reuses the date from
-the day record (never the EXIF date). Deterministic under MockEngine
-(reproduces ingest); the real engine may drift (lossy JXL + greedy
-clustering), which Feature B will formalize.
+Decode a day's archived JXLs in manifest order and re-run the shared
+analyze_frame body, re-derive deletions, recompute stats, and commit_day
+(full replace -> new day id). Reuses the date from the day record (never the
+EXIF date). Deterministic under MockEngine (reproduces ingest); the real
+engine may drift (lossy JXL + greedy clustering), which Feature B formalizes.
 
 Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
 
-## Task 6: queue the reprocess job on the worker
+## Task 7: queue the reprocess job on the worker
 
 **Files:**
 - Modify: `tarzaniq/pipeline.py` (`Job.__init__`; `AppState.enqueue_reprocess`; `_run_job` dispatch; `_run_reprocess`)
@@ -945,7 +1056,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 ---
 
-## Task 7: `POST /api/reprocess` route
+## Task 8: `POST /api/reprocess` route
 
 **Files:**
 - Modify: `tarzaniq/server.py`
@@ -1010,7 +1121,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 ---
 
-## Task 8: "Reprocess from archive" button on the day page
+## Task 9: "Reprocess from archive" button on the day page
 
 **Files:**
 - Modify: `tarzaniq/static/js/pages.js` (the day-detail renderer), `tarzaniq/static/js/util.js` (if an API helper is needed)
@@ -1068,7 +1179,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 ---
 
-## Task 9: ops + docs (uninstall safety, privacy wording, requirements)
+## Task 10: ops + docs (uninstall safety, privacy wording, requirements)
 
 **Files:**
 - Modify: `uninstall.sh`, `README.md`
@@ -1134,8 +1245,8 @@ Expected: every suite `ALL GREEN` / `== all suites green ==`.
 
 ## Self-Review
 
-**Spec coverage:** archive on ingest (Task 4) ✓; manifest with provenance — original filename/seq/time-of-day/sha256 (Tasks 3,4) ✓; configurable archive dir + `TARZANIQ_ARCHIVE` (Task 2) ✓; `archive_target_kb`/`long_edge`/`quality` config (Task 2) ✓; reprocess tier reusing build_day_record/commit_day (Task 5) ✓; queued + SSE (Task 6) ✓; `/api/reprocess` distinct from recompute (Task 7) ✓; Settings/dashboard control (Task 8) ✓; uninstall preserves archive + privacy copy (Task 9) ✓; keep-on-delete (no change to `api_day_delete` — delete never touches the archive, satisfied by construction) ✓; tests for roundtrip + reprocess + sequence preservation (Tasks 1,3,4,5) ✓. No DB migration (non-goal) ✓.
+**Spec coverage:** archive on ingest (Task 4) ✓; manifest with provenance — original filename/seq/time-of-day/sha256 (Tasks 3,4) ✓; configurable archive dir + `TARZANIQ_ARCHIVE` (Task 2) ✓; `archive_target_kb`/`long_edge`/`quality` config (Task 2) ✓; shared `analyze_frame` so ingest + reprocess stay in lockstep, no duplicated logic block (Task 5) ✓; reprocess tier reusing analyze_frame/build_day_record/commit_day (Task 6) ✓; queued + SSE (Task 7) ✓; `/api/reprocess` distinct from recompute (Task 8) ✓; Settings/dashboard control (Task 9) ✓; uninstall preserves archive + privacy copy (Task 10) ✓; keep-on-delete (no change to `api_day_delete` — delete never touches the archive, satisfied by construction) ✓; tests for roundtrip + reprocess + sequence preservation (Tasks 1,3,4,6) ✓. No DB migration (non-goal) ✓.
 
-**Placeholder scan:** all code steps contain full code; the only "read the file then mirror" instruction is Task 8 (frontend), which points at a concrete existing control (`grep recompute`) and supplies the exact handler code.
+**Placeholder scan:** all code steps contain full code; the only "read the file then mirror" instruction is Task 9 (frontend), which points at a concrete existing control (`grep recompute`) and supplies the exact handler code.
 
-**Type consistency:** `encode_jxl(bgr, long_edge, quality)`, `decode_jxl(path)`, `sha256_bytes(data)`, `day_archive_dir(folder_name)`, `write_manifest(folder_name, header, entries)`, `read_manifest`, `iter_archived` used identically in Tasks 1/3/4/5. `reprocess_day(con, day_id, engine, cfg, progress=None) -> (stats, new_id)|None` consistent across Tasks 5/6/7. `Job(folder, kind, day_id)` consistent across Tasks 6/7.
+**Type consistency:** `encode_jxl(bgr, long_edge, quality)`, `decode_jxl(path)`, `sha256_bytes(data)`, `day_archive_dir(folder_name)`, `write_manifest(folder_name, header, entries)`, `read_manifest`, `iter_archived` used identically in Tasks 1/3/4/6. `analyze_frame(engine, tracker, engager, idx, rec, img, flags) -> (record, observations, live)` defined in Task 5, consumed by Task 6. `reprocess_day(con, day_id, engine, cfg, progress=None) -> (stats, new_id)|None` consistent across Tasks 6/7/8. `Job(folder, kind, day_id)` consistent across Tasks 7/8.
