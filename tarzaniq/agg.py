@@ -5,7 +5,7 @@ no photo re-scans, so even years of history render instantly.
 import json
 from collections import defaultdict
 
-from . import db
+from . import db, fingerprint
 
 WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
             "Saturday", "Sunday"]
@@ -17,6 +17,18 @@ RADAR_AXES = [
     ("hustle", "Hustle", "shooting time vs time on street"),
     ("volume", "Volume", "photos / shooting hr"),
 ]
+
+
+def _comparable_days(con, **kw):
+    """All days except legacy ones (photo-less + model/detection behind current).
+    Used by the comparison aggregations; day_detail/all_days are unfiltered."""
+    cur = fingerprint.current()
+    out = []
+    for d in db.all_days(con, **kw):
+        stored = json.loads(d["fp_components"]) if d["fp_components"] else None
+        if fingerprint.is_comparable(stored, cur, bool(d["has_archive"])):
+            out.append(d)
+    return out
 
 
 def _stats(day):
@@ -111,7 +123,7 @@ def radar_percentiles(summaries):
 
 
 def overview(con):
-    days = db.all_days(con)
+    days = _comparable_days(con)
     sums = employee_summaries(days)
     pct = radar_percentiles(sums)
     sts = [_stats(d) for d in days]
@@ -167,7 +179,7 @@ def _fun_records(days, sts):
 
 
 def employee_detail(con, name):
-    days = db.all_days(con)
+    days = _comparable_days(con)
     mine = [d for d in days if d["employee"] == name]
     if not mine:
         return None
@@ -278,14 +290,14 @@ def _patterns_for(days):
 
 
 def patterns(con, employee=None, place=None):
-    days = db.all_days(con, employee=employee or None, place=place or None)
+    days = _comparable_days(con, employee=employee or None, place=place or None)
     dow, hours, demo = _patterns_for(days)
     return {"dow": dow, "hours": hours, "heat": demo["heat"],
             "demographics": demo["demo"], "n_days": len(days)}
 
 
 def places(con):
-    days = db.all_days(con)
+    days = _comparable_days(con)
     by_place = defaultdict(list)
     for d in days:
         by_place[d["place"]].append(d)

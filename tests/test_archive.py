@@ -257,5 +257,38 @@ con.close()
 _c2 = config.load_config(); _c2["min_face_frac"] = _c2["min_face_frac"] - 0.01
 config.save_config(_c2)
 
+# ---- Feature B: legacy (photo-less, model-behind) days are excluded from comparisons ----
+import json as _json3  # noqa: E402
+from tarzaniq import agg as _agg  # noqa: E402
+con = db.connect()
+days_before = _agg.overview(con)["total"]["days"]
+all_before = len(db.all_days(con))
+# Insert a photo-less day with a stale detection fingerprint and no archive.
+_stale_comp = dict(_fpb.current()); _stale_comp["detection_fp"] = "deadbeef0000"
+con.execute("INSERT INTO days(date,weekday,place,employee,source_folder,"
+            "stats_json,params_json,app_version,committed_at,"
+            "processing_fingerprint,fp_components,has_archive) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            ("2020-01-01", "Wednesday", "OldBazaar", "LegacyAnn", None,
+             _json3.dumps({"conversion": 0.5, "cold_persons": 2, "warm_persons": 1,
+                           "photos_total": 5, "shoot_s": 100.0, "span_s": 200.0,
+                           "weekday": "Wednesday", "cold_events": 1,
+                           "warm_dur_avg_s": 1.0, "pitch_avg_s": 1.0, "poses_avg": 1.0,
+                           "hot_streak": 1, "suspected_deletions": 0, "hourly": [],
+                           "gender_count": {}, "gender_warm": {}, "age_count": {}, "age_warm": {}}),
+             "{}", "1.0.0", "2020-01-01T00:00:00",
+             _fpb.fingerprint(_stale_comp), _json3.dumps(_stale_comp), 0))
+con.commit()
+ov = _agg.overview(con)
+check("legacy day excluded from overview totals (count unchanged)",
+      ov["total"]["days"] == days_before, f"{days_before} -> {ov['total']['days']}")
+check("legacy employee absent from leaderboard",
+      all(s["employee"] != "LegacyAnn" for s in ov["leaderboard"]))
+# but it IS still listed by db.all_days (viewable), so the row really exists
+check("legacy day still listed by all_days",
+      len(db.all_days(con)) == all_before + 1
+      and "2020-01-01" in [d["date"] for d in db.all_days(con)])
+con.close()
+
 print("ALL GREEN" if not fails else f"{len(fails)} FAILURES: {fails}")
 sys.exit(1 if fails else 0)
