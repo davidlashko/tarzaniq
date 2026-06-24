@@ -223,14 +223,19 @@ def commit_day(con, day_record):
     existing = find_day(con, d["date"], d["place"], d["employee"])
     if existing:
         con.execute("DELETE FROM days WHERE id=?", (existing,))
+    fp_comp = d.get("fp_components")
     cur = con.execute(
         "INSERT INTO days(date, weekday, place, employee, source_folder, "
         "money_cash, money_card, stats_json, params_json, app_version, "
-        "committed_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+        "committed_at, processing_fingerprint, fp_components, has_archive) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (d["date"], d["weekday"], d["place"], d["employee"],
          d.get("source_folder"), d.get("money_cash"), d.get("money_card"),
          json.dumps(d["stats"]), json.dumps(d["params"]),
-         d.get("app_version"), datetime.now().isoformat()))
+         d.get("app_version"), datetime.now().isoformat(),
+         d.get("processing_fingerprint"),
+         json.dumps(fp_comp) if fp_comp is not None else None,
+         1 if d.get("has_archive") else 0))
     day_id = cur.lastrowid
 
     con.executemany(

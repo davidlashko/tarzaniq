@@ -146,6 +146,16 @@ check("S0 warm dur 12s", abs(s0["warm_duration_s"] - 12) < 0.01,
 xlsx = config.exports_dir() / "26.06.07.CityPark.Marko.xlsx"
 check("excel exported", xlsx.exists())
 
+# ---- Feature B: a freshly committed day is born current ----
+from tarzaniq import fingerprint as _fp  # noqa: E402
+_d0 = db.all_days(con)[0]
+_cur = _fp.current()
+check("committed day stamped current",
+      _d0["processing_fingerprint"] == _fp.fingerprint(_cur),
+      _d0["processing_fingerprint"])
+check("committed day fp_components match current",
+      json.loads(_d0["fp_components"]) == _cur)
+
 # ---------------------------------------------------------------- roundtrip
 rec = import_day(xlsx)
 check("import chunks parse", rec["stats"]["cold_persons"] == 5)

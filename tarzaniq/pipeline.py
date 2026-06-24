@@ -29,7 +29,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from . import APP_VERSION, config, db, naming, exifutil, archive
+from . import APP_VERSION, config, db, naming, exifutil, archive, fingerprint
 from .engagements import Engager, analyze
 from .engine import FaceEngine, SubjectTracker, annotate_preview
 from .excelio import export_day
@@ -404,7 +404,7 @@ class AppState:
             date_iso, job.date.strftime("%A"), job.place, job.employee,
             str(job.folder), money_cash, money_card, stats,
             config.engagement_params(cfg), photo_records, eng_final,
-            subj_meta)
+            subj_meta, has_archive=bool(do_archive and archive_entries))
         day_id = db.commit_day(con, day_record)
         job.result_day_id = day_id
 
@@ -509,7 +509,7 @@ def analyze_frame(engine, tracker, engager, idx, rec, img, flags):
 
 def build_day_record(date_iso, weekday, place, employee, source_folder,
                      cash, card, stats, params, photo_records, eng_final,
-                     subj_meta):
+                     subj_meta, has_archive=False):
     photos_out = [{**p, "t": p["t"].isoformat()} for p in photo_records]
     subjects_out = []
     for sid, s in sorted(eng_final["subjects"].items()):
@@ -543,12 +543,15 @@ def build_day_record(date_iso, weekday, place, employee, source_folder,
             "end": w["end"].isoformat(), "duration_s": w["duration_s"],
             "members": w["subject"], "n_members": 1, "n_converted": None,
             "photos": w["photos"], "poses": w["poses"], "reapproach": False})
+    comp = fingerprint.current()
     return {"date": date_iso, "weekday": weekday, "place": place,
             "employee": employee, "source_folder": source_folder,
             "money_cash": cash, "money_card": card, "stats": stats,
             "params": params, "photos": photos_out,
             "subjects": subjects_out, "engagements": engagements_out,
-            "app_version": APP_VERSION}
+            "app_version": APP_VERSION,
+            "processing_fingerprint": fingerprint.fingerprint(comp),
+            "fp_components": comp, "has_archive": bool(has_archive)}
 
 
 # ------------------------------------------------------------------ recompute
@@ -600,7 +603,8 @@ def recompute_day(con, day_id, params):
     rec = build_day_record(drow["date"], drow["weekday"], drow["place"],
                            drow["employee"], drow["source_folder"],
                            drow["money_cash"], drow["money_card"], stats,
-                           params, photo_records, eng_final, subj_meta)
+                           params, photo_records, eng_final, subj_meta,
+                           has_archive=bool(drow["has_archive"]))
     db.replace_day_analysis(con, day_id, stats, params, kinds_by_pid,
                             rec["subjects"], rec["engagements"])
 
@@ -678,7 +682,8 @@ def reprocess_day(con, day_id, engine, cfg, progress=None, cancel_check=None,
     rec_out = build_day_record(
         drow["date"], drow["weekday"], drow["place"], drow["employee"],
         drow["source_folder"], drow["money_cash"], drow["money_card"], stats,
-        config.engagement_params(cfg), photo_records, eng_final, subj_meta)
+        config.engagement_params(cfg), photo_records, eng_final, subj_meta,
+        has_archive=True)
     new_id = db.commit_day(con, rec_out)
     try:
         export_day(rec_out, config.exports_dir() / f"{folder_name}.xlsx")
