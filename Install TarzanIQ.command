@@ -6,8 +6,12 @@
 #    1. Download the repo ZIP (green "Code" button on GitHub -> Download ZIP).
 #    2. Double-click the ZIP to unzip it.
 #    3. Double-click  "Install TarzanIQ.command"  inside the unzipped folder.
-#       (First time only, macOS may say "unidentified developer" — then
-#        RIGHT-click the file -> Open -> Open. This is normal for free apps.)
+#       First time only, macOS blocks unsigned apps. If you see
+#       "Apple could not verify…", click Done (NOT Move to Trash), then:
+#         System Settings -> Privacy & Security -> scroll to Security ->
+#         click "Open Anyway" -> confirm. (Normal for free software.)
+#       Always-works alternative: in Terminal, type  bash  then drag
+#       install.sh into the window and press Return.
 #
 #  It installs everything (Python if needed, all packages, the face models,
 #  the TarzanIQ app, and the Finder right-click action). Re-running is safe.

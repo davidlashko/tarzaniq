@@ -27,29 +27,59 @@ friendly 8-bit jungle dashboard.
 The honest score is **conversion = posed ÷ candid**. Cash can't be trusted (pockets leak), but a
 posed person in the photos is proof a sale happened. Bananas don't lie.
 
-## Install (one time) — download, unzip, double-click
+## Install (one time) — download, unzip, allow, run
 
-1. **Download.** On the GitHub page, click the green **Code** button → **Download ZIP**.
-2. **Unzip.** Double-click the downloaded ZIP — you get a folder (e.g. `tarzaniq-main`).
-3. **Run the installer.** Open that folder and **double-click `Install TarzanIQ.command`**.
-   - **First time only — the "unidentified developer" message.** macOS blocks double-clicked
-     downloads from outside the App Store. This is normal for free/open software. Instead of
-     double-clicking, **right-click** `Install TarzanIQ.command` → **Open** → **Open** in the
-     dialog. You only do this once. *(There's no way around this without a paid Apple Developer
-     certificate — it doesn't mean anything is wrong.)*
-4. **Let it run.** A Terminal window opens and does everything automatically: installs Python if
-   you don't have a suitable one, all the packages, the four face models (~83 MB, checksum-verified),
-   builds the **TarzanIQ** app, and adds the Finder right-click action. It tells you when it's done.
-   - On a brand-new Mac it may ask for your **password** (to install Homebrew + Python) and pop a
-     one-time **"Command Line Tools"** window — accept that and it keeps going. First run takes a
-     few minutes.
+### 1. Download
+On the GitHub page, click the green **`< > Code`** button → **Download ZIP**.
+
+### 2. Unzip
+Double-click the downloaded ZIP. You get a folder (e.g. `tarzaniq-main`). Open it.
+
+### 3. Let macOS allow the installer (the one-time security step)
+Apple blocks **any** free/unsigned app the first time you open it. This is expected — nothing is
+wrong with TarzanIQ. You'll see one of these; here's exactly what to do.
+
+**If you double-click `Install TarzanIQ.command` and get
+*""Install TarzanIQ.command" Not Opened — Apple could not verify…"*** with **Move to Trash** /
+**Done** buttons:
+
+1. Click **Done**. **Do NOT click "Move to Trash"** (that deletes it).
+2. Open the **Apple menu () → System Settings → Privacy & Security**.
+3. Scroll down to the **Security** section. You'll see:
+   *""Install TarzanIQ.command" was blocked to protect your Mac."* with an **Open Anyway** button.
+4. Click **Open Anyway** → confirm with **Touch ID or your password** → on the final popup click
+   **Open**.
+5. The installer opens in Terminal and runs. You only do this once.
+
+> On older macOS the equivalent is **right-click (Control-click) `Install TarzanIQ.command` →
+> Open → Open**. If your version shows an **Open** button that way, use it; otherwise use the
+> System Settings → **Open Anyway** steps above.
+
+**Bulletproof alternative (always works, sidesteps the warning):** running a script with `bash`
+isn't security-gated the way a double-click is.
+1. Open **Terminal** (⌘-Space, type `Terminal`, Enter).
+2. Type `bash` **and a space**, then **drag `install.sh`** (the file next to
+   `Install TarzanIQ.command`) into the window so its path appears, and press **Enter**.
+
+### 4. Let it run
+A Terminal window does everything automatically: installs Python if you don't have a suitable one,
+all the packages, the four face models (~83 MB, checksum-verified), builds the **TarzanIQ** app, and
+adds the Finder right-click action. It prints **✅ All done** when finished.
+- On a brand-new Mac it may ask for your **password** (to install Homebrew + Python) and pop a
+  one-time **"Command Line Tools"** window — accept that and it keeps going. First run takes a few
+  minutes.
 
 After it finishes you can delete the downloaded folder — the app now lives in
 `~/Library/Application Support/TarzanIQ`, and your data lives separately (see "Where things live").
 
-> **"Permission denied" when double-clicking?** Use **right-click → Open** (step 3) rather than a
-> plain double-click. Nothing is locked to a specific machine — "binds to this Mac" only means the
-> dashboard is private to your computer.
+> **Why the security prompt?** TarzanIQ is open-source and not signed with a paid Apple Developer
+> certificate, so Gatekeeper asks you to approve it once. It's not machine-locked — "binds to this
+> Mac" only means the dashboard is private to your computer.
+>
+> **Still stuck / "permission denied"?** Use the **Terminal** method in step 3 (`bash` + drag
+> `install.sh`). To make a normal double-click work afterward, in Terminal type
+> `xattr -dr com.apple.quarantine ` then drag the **unzipped folder** in and press Enter — that
+> clears the "downloaded from the internet" flag.
 
 ## The daily routine
 
