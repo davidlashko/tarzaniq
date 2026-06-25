@@ -54,7 +54,7 @@ from tarzaniq import config  # noqa: E402
 
 cfg = config.load_config()
 for k, default in (("archive_enabled", True), ("archive_long_edge", 1600),
-                   ("archive_target_kb", 150), ("archive_quality", 80),
+                   ("archive_target_kb", 150), ("archive_quality", 91),
                    ("archive_dir", "")):
     check(f"DEFAULTS has {k}", k in config.DEFAULTS and config.DEFAULTS[k] == default,
           str(config.DEFAULTS.get(k)))
@@ -253,6 +253,13 @@ res = bring_current(st, con)
 check("bring_current queued a reprocess for the archived day", res["reprocess_queued"] >= 1, str(res))
 con.close()
 
+# drain the async reprocess so it doesn't re-commit Ana during later tests
+_t0 = _time.time()
+while _time.time() - _t0 < 60:
+    if not any(j.status in ("queued", "scanning", "processing", "waiting") for j in st.jobs):
+        break
+    _time.sleep(0.3)
+
 # restore config so later/other runs aren't affected
 _c2 = config.load_config(); _c2["min_face_frac"] = _c2["min_face_frac"] - 0.01
 config.save_config(_c2)
@@ -294,21 +301,24 @@ con.close()
 import shutil as _shutil  # noqa: E402
 from tarzaniq.pipeline import reprocess_day as _rpd  # noqa: E402
 con = db.connect()
-_ana = [d for d in db.all_days(con) if d["employee"] == "Ana"][0]
-# wipe the archive dir for this day so reprocess can't find a manifest
-_adir = archive.day_archive_dir("26.06.11.OldBazaar.Ana")
-if _adir.exists():
-    _shutil.rmtree(_adir)
-_raised = False
-try:
-    _rpd(con, _ana["id"], MockEngine({}), config.load_config())
-except FileNotFoundError:
-    _raised = True
-check("reprocess_day raises when archive is gone", _raised)
-# the worker's _run_reprocess catches it and reconciles has_archive -> 0; emulate that call path:
-db.set_day_archive_flag(con, _ana["id"], False)
-_after = db.day_row(con, _ana["id"])
-check("missing-archive day reconciled to has_archive=0", _after["has_archive"] == 0)
+_ana = next((d for d in db.all_days(con) if d["employee"] == "Ana"), None)
+check("Ana day present for missing-archive test", _ana is not None)
+if _ana:
+    # wipe the archive dir for this day so reprocess can't find a manifest
+    _adir = archive.day_archive_dir("26.06.11.OldBazaar.Ana")
+    if _adir.exists():
+        _shutil.rmtree(_adir)
+    _raised = False
+    try:
+        _rpd(con, _ana["id"], MockEngine({}), config.load_config())
+    except FileNotFoundError:
+        _raised = True
+    check("reprocess_day raises when archive is gone", _raised)
+    # the worker's _run_reprocess catches it and reconciles has_archive -> 0; emulate that:
+    db.set_day_archive_flag(con, _ana["id"], False)
+    _after = db.day_row(con, _ana["id"])
+    check("missing-archive day reconciled to has_archive=0",
+          _after is not None and _after["has_archive"] == 0)
 con.close()
 
 print("ALL GREEN" if not fails else f"{len(fails)} FAILURES: {fails}")

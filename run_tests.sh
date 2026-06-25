@@ -17,7 +17,12 @@ DEMO=/tmp/tq_demo
 echo "== unit + integration (Python) =="
 "$PY" tests/test_engagements.py
 "$PY" tests/test_server.py
+"$PY" tests/test_fingerprint.py
+"$PY" tests/test_significance.py
+"$PY" tests/test_migration.py
+"$PY" tests/test_app_window.py
 "$PY" tests/test_e2e.py
+"$PY" tests/test_archive.py
 
 echo ""
 echo "== DOM smoke (real SPA in jsdom vs a MockEngine server) =="

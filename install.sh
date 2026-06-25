@@ -120,24 +120,34 @@ fetch_model "gender_googlenet.onnx" \
 say "Writing launcher"
 cat > "$APPDIR/launch.sh" << LAUNCH
 #!/bin/bash
-# TarzanIQ launcher — starts the local server if needed, then opens the
-# dashboard. Any folder paths passed as arguments get queued for analysis.
+# TarzanIQ launcher. Prefers the native app window (own window, no browser);
+# falls back to the local server + your browser if the window stack is missing.
+# Any folder paths passed as arguments get queued for analysis.
 APPDIR="\$HOME/Library/Application Support/TarzanIQ"
 DATA="\${TARZANIQ_DATA:-\$HOME/Documents/TarzanIQ Data}"
 PORT=$PORT
 URL="http://127.0.0.1:\$PORT"
+PYBIN="\$APPDIR/venv/bin/python"
 mkdir -p "\$DATA/logs"
+
+# --- preferred: native window (pywebview). Runs the engine in-process. ---
+if "\$PYBIN" -c "import webview" >/dev/null 2>&1; then
+  cd "\$APPDIR/app" || exit 1
+  nohup "\$PYBIN" -m tarzaniq.app_window "\$@" >> "\$DATA/logs/window.log" 2>&1 &
+  exit 0
+fi
+
+# --- fallback: headless server + browser ---
 if ! curl -s --max-time 2 "\$URL/api/ping" 2>/dev/null | grep -q TarzanIQ; then
   cd "\$APPDIR/app" || exit 1
-  nohup "\$APPDIR/venv/bin/python" -m tarzaniq.server \\
-    >> "\$DATA/logs/server.log" 2>&1 &
+  nohup "\$PYBIN" -m tarzaniq.server >> "\$DATA/logs/server.log" 2>&1 &
   for i in \$(seq 1 60); do
     sleep 0.5
     curl -s --max-time 1 "\$URL/api/ping" 2>/dev/null | grep -q TarzanIQ && break
   done
 fi
 if [ "\$#" -gt 0 ]; then
-  "\$APPDIR/venv/bin/python" - "\$URL" "\$@" << 'PYEOF'
+  "\$PYBIN" - "\$URL" "\$@" << 'PYEOF'
 import json, sys, urllib.request
 url, folders = sys.argv[1], sys.argv[2:]
 req = urllib.request.Request(url + "/api/enqueue",
