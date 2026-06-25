@@ -4,3 +4,4 @@ flask>=3.1
 openpyxl>=3.1
 pillow>=11.0
 pillow-jxl-plugin>=1.3   # JPEG XL encode/decode for the permanent photo archive (Feature A)
+pywebview>=5.0           # native desktop window (macOS system WebKit via pyobjc) — the standalone GUI
