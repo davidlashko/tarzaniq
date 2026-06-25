@@ -223,15 +223,18 @@ td.c, th.c { text-align: center; }
   position: relative; background: #000;
   border: var(--px) solid var(--ink);
   box-shadow: 0 0 0 2px var(--vine), 8px 8px 0 rgba(0,0,0,.5);
-  /* Cap the camera to a slice of the viewport so the vine + counts + controls
-     always stay on-screen (fits a 13" MacBook without scrolling). */
-  min-height: 180px; max-height: 46vh;
+  /* Reserve ~430px for the header + queue + "Field camera" title + vine +
+     counts + controls, and give the camera the rest of the viewport (bounded
+     to 58vh on big screens, 180px floor). Keeps the whole Live tab on one
+     screen on a 13"/14" MacBook by construction, regardless of window height. */
+  min-height: 180px;
+  max-height: clamp(180px, calc(100vh - 430px), 58vh);
   display: flex; align-items: center; justify-content: center;
   overflow: hidden;
 }
 #liveframe img {
-  display: block; max-width: 100%; max-height: 46vh; height: auto;
-  image-rendering: auto;
+  display: block; max-width: 100%; height: auto; image-rendering: auto;
+  max-height: clamp(180px, calc(100vh - 430px), 58vh);
 }
 #liveframe .scan {
   position: absolute; inset: 0; pointer-events: none;
