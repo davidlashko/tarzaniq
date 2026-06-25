@@ -327,7 +327,7 @@ absent from `DEFAULTS` are silently dropped on save — add new ones there.
 | `archive_dir` | "" → `~/Documents/TarzanIQ Archive` | Where JXL copies and manifests are stored |
 | `archive_long_edge` | 1600 | Resize long edge (px) before JXL encode |
 | `archive_target_kb` | 150 | Target file size in KB for the JXL encode |
-| `archive_quality` | 80 | JXL quality setting (0–100) |
+| `archive_quality` | 91 | JXL quality (0–100); calibrated so ~33 MP photos land ≈150 KB at 1600px |
 
 ## Testing
 

@@ -37,7 +37,8 @@ DEFAULTS = {
     "archive_dir": "",          # "" => $TARZANIQ_ARCHIVE or ~/Documents/TarzanIQ Archive
     "archive_long_edge": 1600,  # max long edge of the archived copy (px)
     "archive_target_kb": 150,   # size intent; calibrate archive_quality to it
-    "archive_quality": 80,      # JXL quality used at ingest
+    "archive_quality": 91,      # JXL quality at ingest; calibrated on real ~33MP
+                                # Sony files -> 1600px ≈ 145 KB median (~150 KB target)
 }
 
 CONFIG_VERSION = 1
