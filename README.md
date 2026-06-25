@@ -27,22 +27,29 @@ friendly 8-bit jungle dashboard.
 The honest score is **conversion = posed ÷ candid**. Cash can't be trusted (pockets leak), but a
 posed person in the photos is proof a sale happened. Bananas don't lie.
 
-## Install (one time, ~5 minutes)
+## Install (one time) — download, unzip, double-click
 
-1. Put the `TarzanIQ` folder anywhere (Downloads is fine).
-2. Open **Terminal** (press ⌘-Space, type "Terminal", Enter).
-3. Type `bash ` (the word *bash* and a space), then **drag `install.sh` into the Terminal
-   window** so its path appears, and press **Enter**.
-4. Wait for the ape. The installer builds the Python environment, downloads the four face models
-   (~83 MB, checksum-verified), and creates the **TarzanIQ.app** droplet plus the Finder
-   right-click action.
+1. **Download.** On the GitHub page, click the green **Code** button → **Download ZIP**.
+2. **Unzip.** Double-click the downloaded ZIP — you get a folder (e.g. `tarzaniq-main`).
+3. **Run the installer.** Open that folder and **double-click `Install TarzanIQ.command`**.
+   - **First time only — the "unidentified developer" message.** macOS blocks double-clicked
+     downloads from outside the App Store. This is normal for free/open software. Instead of
+     double-clicking, **right-click** `Install TarzanIQ.command` → **Open** → **Open** in the
+     dialog. You only do this once. *(There's no way around this without a paid Apple Developer
+     certificate — it doesn't mean anything is wrong.)*
+4. **Let it run.** A Terminal window opens and does everything automatically: installs Python if
+   you don't have a suitable one, all the packages, the four face models (~83 MB, checksum-verified),
+   builds the **TarzanIQ** app, and adds the Finder right-click action. It tells you when it's done.
+   - On a brand-new Mac it may ask for your **password** (to install Homebrew + Python) and pop a
+     one-time **"Command Line Tools"** window — accept that and it keeps going. First run takes a
+     few minutes.
 
 After it finishes you can delete the downloaded folder — the app now lives in
 `~/Library/Application Support/TarzanIQ`, and your data lives separately (see "Where things live").
 
-> **If you see "Permission denied":** the file was probably double-clicked instead of run with
-> `bash`. Redo step 3 (type `bash ` first, then drag the file in). Nothing is locked to a specific
-> machine — "binds to this Mac" only means the dashboard is private to your computer.
+> **"Permission denied" when double-clicking?** Use **right-click → Open** (step 3) rather than a
+> plain double-click. Nothing is locked to a specific machine — "binds to this Mac" only means the
+> dashboard is private to your computer.
 
 ## The daily routine
 
