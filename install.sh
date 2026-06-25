@@ -1,6 +1,8 @@
 #!/bin/bash
 # TarzanIQ installer — macOS (Apple Silicon or Intel)
-# Run:  bash install.sh
+# Easiest: double-click "Install TarzanIQ.command". Or run:  bash install.sh
+# Installs Python (if needed), all packages, the face models, the app, and the
+# Finder right-click action. Safe to re-run.
 set -u
 
 BOLD=$(tput bold 2>/dev/null || true); DIM=$(tput dim 2>/dev/null || true)
@@ -25,16 +27,44 @@ echo
 [ "$(uname)" = "Darwin" ] || die "This installer is for macOS."
 [ -d "$HERE/tarzaniq" ] || die "Run me from inside the TarzanIQ folder (tarzaniq/ not found)."
 
+# strip the "downloaded from the internet" quarantine so the app we build runs
+xattr -dr com.apple.quarantine "$HERE" >/dev/null 2>&1 || true
+
 # ---------------------------------------------------------------- python
-if ! command -v python3 >/dev/null 2>&1; then
-  warn "python3 not found. macOS will offer to install the developer tools."
-  xcode-select --install 2>/dev/null || true
-  die "Install the tools from the popup (or install Python from python.org), then run install.sh again."
+# opencv/numpy/pillow ship wheels for CPython 3.11–3.13 (NOT the 3.14 dev line,
+# and not the bare /usr/bin/python3 stub). Find a good one; if none, install
+# python@3.12 via Homebrew so a fresh Mac "just works".
+pick_python() {
+  local c v
+  for c in python3.12 python3.11 python3.13; do
+    command -v "$c" >/dev/null 2>&1 && { echo "$c"; return 0; }
+  done
+  if command -v python3 >/dev/null 2>&1; then
+    v=$(python3 -c 'import sys;print(sys.version_info[0]*100+sys.version_info[1])' 2>/dev/null)
+    [ -n "$v" ] && [ "$v" -ge 311 ] && [ "$v" -le 313 ] && { echo python3; return 0; }
+  fi
+  return 1
+}
+
+PY="$(pick_python || true)"
+if [ -z "$PY" ]; then
+  warn "No suitable Python found (need 3.11–3.13)."
+  if ! command -v brew >/dev/null 2>&1; then
+    say "Installing Homebrew (you may be asked for your Mac password; a Command"
+    say "Line Tools window may also pop up — accept it, then this continues)…"
+    NONINTERACTIVE=1 /bin/bash -c \
+      "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" \
+      || die "Homebrew install failed. Easiest fix: install Python 3.12 from python.org, then run me again."
+    eval "$(/opt/homebrew/bin/brew shellenv 2>/dev/null || /usr/local/bin/brew shellenv 2>/dev/null || true)"
+  fi
+  say "Installing Python 3.12 via Homebrew (one time)…"
+  brew install python@3.12 || die "Could not install Python. Install Python 3.12 from python.org, then run me again."
+  PY="$(brew --prefix 2>/dev/null)/bin/python3.12"
+  [ -x "$PY" ] || PY="$(pick_python || true)"
+  [ -n "$PY" ] || die "Python still not found. Install Python 3.12 from python.org, then run me again."
 fi
-PYV=$(python3 -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")')
-say "python3 $PYV found"
-python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' \
-  || die "Python 3.9+ required (found $PYV). Install a newer Python from python.org."
+PYV=$("$PY" -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")')
+say "Using Python $PYV  ($PY)"
 
 # ---------------------------------------------------------------- app copy + venv
 mkdir -p "$APPDIR" "$DATA/models" "$DATA/logs" "$DATA/exports" "$DATA/backups"
@@ -44,9 +74,15 @@ mkdir -p "$APPDIR/app"
 cp -R "$HERE/tarzaniq" "$APPDIR/app/"
 cp "$HERE/requirements.txt" "$APPDIR/app/"
 
+# rebuild the venv if missing or built with an unsupported Python (e.g. a prior
+# failed run on 3.14)
+if [ -x "$APPDIR/venv/bin/python" ]; then
+  "$APPDIR/venv/bin/python" -c 'import sys; sys.exit(0 if (3,11)<=sys.version_info<(3,14) else 1)' 2>/dev/null \
+    || { warn "Existing environment uses an unsupported Python — rebuilding it"; rm -rf "$APPDIR/venv"; }
+fi
 if [ ! -x "$APPDIR/venv/bin/python" ]; then
   say "Creating Python environment (one time)"
-  python3 -m venv "$APPDIR/venv" || die "Could not create a virtualenv."
+  "$PY" -m venv "$APPDIR/venv" || die "Could not create a virtualenv."
 fi
 say "Installing Python packages (this can take a few minutes the first time)"
 "$APPDIR/venv/bin/pip" install --upgrade pip --quiet
