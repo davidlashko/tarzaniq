@@ -84,25 +84,36 @@ if [ ! -x "$APPDIR/venv/bin/python" ]; then
   say "Creating Python environment (one time)"
   "$PY" -m venv "$APPDIR/venv" || die "Could not create a virtualenv."
 fi
-say "Installing Python packages (this can take a few minutes the first time)"
-"$APPDIR/venv/bin/pip" install --upgrade pip --quiet
-"$APPDIR/venv/bin/pip" install -r "$APPDIR/app/requirements.txt" --quiet \
+say "Installing Python packages — pip's progress follows (a few minutes the first time):"
+"$APPDIR/venv/bin/pip" install --upgrade pip
+"$APPDIR/venv/bin/pip" install -r "$APPDIR/app/requirements.txt" \
   || die "pip install failed — check your internet connection and rerun."
 say "Packages ready"
 
 # ---------------------------------------------------------------- models
+MODEL_I=0
 fetch_model() {  # name url sha256 size
   local name="$1" url="$2" sha="$3" size="$4" dst="$DATA/models/$1"
+  MODEL_I=$((MODEL_I + 1))
+  local mb=$(( (${size:-0} + 524288) / 1048576 )); local mbtxt="${mb} MB"
+  [ "$mb" -eq 0 ] && mbtxt="<1 MB"
   if [ -f "$dst" ] && echo "$sha  $dst" | shasum -a 256 -c - >/dev/null 2>&1; then
-    say "model $name already in place"; return 0
+    say "[$MODEL_I/4] $name — already downloaded, skipping"; return 0
   fi
-  say "Downloading $name ($(awk "BEGIN{printf \"%.1f\", $size/1048576}") MB)"
-  curl -L --fail --progress-bar -o "$dst.part" "$url" || { rm -f "$dst.part"; die "Download failed: $name"; }
+  say "[$MODEL_I/4] Downloading $name (~$mbtxt) — a progress bar appears below:"
+  # --speed-limit/--speed-time abort a stalled connection (so it can't hang
+  # forever); --retry then tries again. The bar shows it's actually moving.
+  curl -L --fail --progress-bar \
+       --connect-timeout 30 --retry 4 --retry-delay 3 \
+       --speed-limit 2048 --speed-time 60 \
+       -o "$dst.part" "$url" \
+    || { rm -f "$dst.part"; die "Download stalled or failed: $name. Check your internet, then double-click the installer again (finished models are skipped)."; }
   echo "$sha  $dst.part" | shasum -a 256 -c - >/dev/null 2>&1 \
-    || { rm -f "$dst.part"; die "Checksum mismatch for $name — rerun the installer."; }
+    || { rm -f "$dst.part"; die "Checksum mismatch for $name — re-run the installer."; }
   mv "$dst.part" "$dst"
+  say "[$MODEL_I/4] $name — done ✓"
 }
-say "Fetching face models (~83 MB total, one time)"
+say "Fetching the 4 face models (~83 MB total, one time)…"
 fetch_model "face_detection_yunet_2023mar.onnx" \
   "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx" \
   "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4" 232589
