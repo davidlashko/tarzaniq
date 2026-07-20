@@ -12,11 +12,27 @@ import sys
 import threading
 import time
 import urllib.request
+from pathlib import Path
 
 from . import APP_NAME, DEFAULT_PORT
 from . import server as srv
 
 URL = f"http://127.0.0.1:{DEFAULT_PORT}"
+
+ICON_PNG = Path(__file__).parent / "static" / "img" / "icon_1024.png"
+
+
+def _set_dock_icon():
+    """Show the ape in the Dock instead of the generic Python icon.
+    NSApplication.sharedApplication() creates the app singleton pywebview
+    will reuse, so setting the icon before webview.start() sticks."""
+    try:
+        from AppKit import NSApplication, NSImage  # pyobjc, ships with pywebview
+        img = NSImage.alloc().initWithContentsOfFile_(str(ICON_PNG))
+        if img:
+            NSApplication.sharedApplication().setApplicationIconImage_(img)
+    except Exception:
+        pass  # cosmetic only — never block launch over the icon
 
 
 def _server_up(timeout=1.0):
@@ -61,6 +77,8 @@ def main(argv=None):
             return 1
     _enqueue(folders)
     import webview                            # lazy: only needed to show the window
+    if sys.platform == "darwin":
+        _set_dock_icon()
     start = URL + ("/#/live" if folders else "/")
     webview.create_window(APP_NAME, start, width=1200, height=820,
                           min_size=(900, 640))

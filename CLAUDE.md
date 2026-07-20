@@ -128,4 +128,5 @@ All three features are implemented and merged. See `docs/` for original design d
 - **Branches:** `type/slug-YYYY-MM-DD`; feature work via PR to `main`; scaffolding direct to main.
 - **Keep the whole test suite green** (`test_engagements`, `test_e2e`, `test_server`, `dom_smoke`)
   throughout every change.
-- This repo is **public** — never commit photos, data, DBs, exports, or models.
+- This repo is **private** (flipped from public 2026-06-28) — still never commit
+  photos, data, DBs, exports, or models.

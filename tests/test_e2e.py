@@ -13,6 +13,9 @@ sys.path.insert(0, str(ROOT))
 
 TMP = Path(tempfile.mkdtemp(prefix="tarzaniq_test_"))
 os.environ["TARZANIQ_DATA"] = str(TMP / "data")
+# keep the JXL archive in the sandbox too — never write test days into the
+# user's real ~/Documents/TarzanIQ Archive (pollution + macOS TCC stalls)
+os.environ["TARZANIQ_ARCHIVE"] = str(TMP / "archive")
 
 import numpy as np  # noqa: E402
 import piexif  # noqa: E402

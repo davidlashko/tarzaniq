@@ -31,6 +31,8 @@ posed person in the photos is proof a sale happened. Bananas don't lie.
 
 ### 1. Download
 On the GitHub page, click the green **`< > Code`** button → **Download ZIP**.
+*(The repo is private — you must be signed in to GitHub with access. To install on someone
+else's Mac, either add them as a collaborator or just hand them the ZIP.)*
 
 ### 2. Unzip
 Double-click the downloaded ZIP. You get a folder (e.g. `tarzaniq-main`). Open it.
@@ -185,7 +187,7 @@ Then press **Recompute** to apply.
 
 A local-only **Flask** app with a dependency-free vanilla-JS SPA. The whole pipeline runs
 on-device; nothing is sent anywhere (the server binds to `127.0.0.1:43117` only). This repo is
-**public — it ships code only**: no photos, data, databases, Excel exports, or ML models are ever
+**private** and ships code only: no photos, data, databases, Excel exports, or ML models are ever
 committed.
 
 ## Tech stack
@@ -390,7 +392,8 @@ every page renders, the leaderboard orders correctly, and all five prompt modals
   straight to `main`.
 - **Keep the whole suite green** through every change.
 - **No "built with / produced by" attributions** in any app output, export, or UI.
-- **Never commit** photos, data, databases, exports, or models — this repo is public.
+- **Never commit** photos, data, databases, exports, or models (the repo is private now,
+  but keep the hygiene).
 
 See [CLAUDE.md](CLAUDE.md) for the full enduring spec and [docs/HANDOFF.md](docs/HANDOFF.md) for
 project history and the current feature briefs.
