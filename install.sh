@@ -77,20 +77,24 @@ pick_python() {
 
 PY="$(pick_python || true)"
 if [ -z "$PY" ]; then
-  warn "No suitable Python found (need 3.11–3.13)."
-  if ! command -v brew >/dev/null 2>&1; then
-    say "Installing Homebrew (you may be asked for your Mac password; a Command"
-    say "Line Tools window may also pop up — accept it, then this continues)…"
-    NONINTERACTIVE=1 /bin/bash -c \
-      "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" \
-      || die "Homebrew install failed. Easiest fix: install Python 3.12 from python.org, then run me again."
-    eval "$(/opt/homebrew/bin/brew shellenv 2>/dev/null || /usr/local/bin/brew shellenv 2>/dev/null || true)"
-  fi
-  say "Installing Python 3.12 via Homebrew (one time)…"
-  brew install python@3.12 || die "Could not install Python. Install Python 3.12 from python.org, then run me again."
-  PY="$(brew --prefix 2>/dev/null)/bin/python3.12"
-  [ -x "$PY" ] || PY="$(pick_python || true)"
-  [ -n "$PY" ] || die "Python still not found. Install Python 3.12 from python.org, then run me again."
+  # Fresh Mac: install the OFFICIAL python.org build directly (~44 MB, one
+  # password prompt). No Homebrew — its silent mode can't ask for a password,
+  # which used to kill installs on machines without it.
+  PKG_URL="https://www.python.org/ftp/python/3.12.10/python-3.12.10-macos11.pkg"
+  PKG_SHA="8373e58da4ea146b3eb1c1f9834f19a319440b6b679b06050b1f9ee3237aa8e4"
+  warn "No suitable Python found (need 3.11–3.13) — installing the official one."
+  say "Downloading Python 3.12 from python.org (~44 MB, one time)…"
+  curl -fL --progress-bar --connect-timeout 30 --retry 3 \
+       -o /tmp/tarzaniq-python.pkg "$PKG_URL" \
+    || die "Download failed — check your internet and run me again."
+  echo "$PKG_SHA  /tmp/tarzaniq-python.pkg" | shasum -a 256 -c - >/dev/null 2>&1 \
+    || { rm -f /tmp/tarzaniq-python.pkg; die "Python download didn't verify — run me again."; }
+  say "macOS will now ask for your password (installing official Python system-wide)…"
+  sudo installer -pkg /tmp/tarzaniq-python.pkg -target / \
+    || die "Python install needs an admin password. Run me again and enter it when asked."
+  rm -f /tmp/tarzaniq-python.pkg
+  PY="$(pick_python || true)"
+  [ -n "$PY" ] || die "Python still not found after install — install Python 3.12 from python.org manually, then run me again."
 fi
 PYV=$("$PY" -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")')
 say "Using Python $PYV  ($PY)"
