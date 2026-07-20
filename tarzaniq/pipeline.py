@@ -18,6 +18,7 @@ the loop between photos.
 import base64
 import json
 import logging
+import os
 import queue as queue_mod
 import shutil
 import subprocess
@@ -222,7 +223,11 @@ class AppState:
         caf = None
         if shutil.which("caffeinate"):
             try:
-                caf = subprocess.Popen(["caffeinate", "-i"])
+                # -w: caffeinate exits by itself when THIS process dies, so a
+                # killed app/test can never leave a stray keeping the Mac awake
+                # (or holding inherited pipes open).
+                caf = subprocess.Popen(
+                    ["caffeinate", "-i", "-w", str(os.getpid())])
             except Exception:
                 caf = None
         try:

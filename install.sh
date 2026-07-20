@@ -5,6 +5,11 @@
 # Finder right-click action. Safe to re-run.
 set -u
 
+# Double-clicked .command windows get a bare PATH (no Homebrew, no python.org
+# installs) — which once made this installer "not find" a Python that was
+# right there and try to install Homebrew instead. Fix the PATH up front.
+export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:$PATH"
+
 BOLD=$(tput bold 2>/dev/null || true); DIM=$(tput dim 2>/dev/null || true)
 GRN=$(tput setaf 2 2>/dev/null || true); YLW=$(tput setaf 3 2>/dev/null || true)
 RED=$(tput setaf 1 2>/dev/null || true); RST=$(tput sgr0 2>/dev/null || true)
@@ -25,7 +30,18 @@ echo "${DIM}  data: $DATA${RST}"
 echo
 
 [ "$(uname)" = "Darwin" ] || die "This installer is for macOS."
-[ -d "$HERE/tarzaniq" ] || die "Run me from inside the TarzanIQ folder (tarzaniq/ not found)."
+
+# Source of the app files: the downloaded folder normally; if run from the
+# installed copy (repair mode — e.g. macOS updated Python underneath the app),
+# reuse the files already in place.
+SRC=""
+if [ -d "$HERE/tarzaniq" ]; then
+  SRC="$HERE"
+elif [ -d "$APPDIR/app/tarzaniq" ]; then
+  SRC=""; say "Repair mode — reusing the installed app files"
+else
+  die "Run me from inside the TarzanIQ folder (tarzaniq/ not found)."
+fi
 
 # strip the "downloaded from the internet" quarantine so the app we build runs
 xattr -dr com.apple.quarantine "$HERE" >/dev/null 2>&1 || true
@@ -38,6 +54,19 @@ pick_python() {
   local c v
   for c in python3.12 python3.11 python3.13; do
     command -v "$c" >/dev/null 2>&1 && { echo "$c"; return 0; }
+  done
+  # absolute locations, in case PATH is still bare (keg-only Homebrew kegs,
+  # python.org framework installs)
+  for c in \
+      /opt/homebrew/opt/python@3.12/bin/python3.12 \
+      /opt/homebrew/opt/python@3.11/bin/python3.11 \
+      /opt/homebrew/opt/python@3.13/bin/python3.13 \
+      /usr/local/opt/python@3.12/bin/python3.12 \
+      /usr/local/opt/python@3.13/bin/python3.13 \
+      /Library/Frameworks/Python.framework/Versions/3.12/bin/python3.12 \
+      /Library/Frameworks/Python.framework/Versions/3.11/bin/python3.11 \
+      /Library/Frameworks/Python.framework/Versions/3.13/bin/python3.13; do
+    [ -x "$c" ] && { echo "$c"; return 0; }
   done
   if command -v python3 >/dev/null 2>&1; then
     v=$(python3 -c 'import sys;print(sys.version_info[0]*100+sys.version_info[1])' 2>/dev/null)
@@ -68,17 +97,22 @@ say "Using Python $PYV  ($PY)"
 
 # ---------------------------------------------------------------- app copy + venv
 mkdir -p "$APPDIR" "$DATA/models" "$DATA/logs" "$DATA/exports" "$DATA/backups"
-say "Copying app into place"
-rm -rf "$APPDIR/app"
-mkdir -p "$APPDIR/app"
-cp -R "$HERE/tarzaniq" "$APPDIR/app/"
-cp "$HERE/requirements.txt" "$APPDIR/app/"
+if [ -n "$SRC" ]; then
+  say "Copying app into place"
+  rm -rf "$APPDIR/app"
+  mkdir -p "$APPDIR/app"
+  cp -R "$SRC/tarzaniq" "$APPDIR/app/"
+  cp "$SRC/requirements.txt" "$APPDIR/app/"
+fi
 
-# rebuild the venv if missing or built with an unsupported Python (e.g. a prior
-# failed run on 3.14)
-if [ -x "$APPDIR/venv/bin/python" ]; then
-  "$APPDIR/venv/bin/python" -c 'import sys; sys.exit(0 if (3,11)<=sys.version_info<(3,14) else 1)' 2>/dev/null \
-    || { warn "Existing environment uses an unsupported Python — rebuilding it"; rm -rf "$APPDIR/venv"; }
+# rebuild the venv if it is broken (e.g. a Homebrew upgrade removed the Python
+# it was built on) or was built with an unsupported Python
+if [ -d "$APPDIR/venv" ]; then
+  if [ ! -x "$APPDIR/venv/bin/python" ] \
+     || ! "$APPDIR/venv/bin/python" -c 'import sys; sys.exit(0 if (3,11)<=sys.version_info<(3,14) else 1)' 2>/dev/null; then
+    warn "Existing environment is broken or unsupported — rebuilding it"
+    rm -rf "$APPDIR/venv"
+  fi
 fi
 if [ ! -x "$APPDIR/venv/bin/python" ]; then
   say "Creating Python environment (one time)"
@@ -141,6 +175,14 @@ URL="http://127.0.0.1:\$PORT"
 PYBIN="\$APPDIR/venv/bin/python"
 mkdir -p "\$DATA/logs"
 
+# --- self-heal: a macOS/Homebrew update can remove the Python this app was
+# --- built on. If the environment is broken, offer a one-click repair.
+if ! "\$PYBIN" -c 'import sys' >/dev/null 2>&1; then
+  ans=\$(osascript -e 'display dialog "TarzanIQ needs a quick repair — a macOS update changed Python underneath it.\n\nClick Repair to fix it automatically (takes a few minutes; a Terminal window will show progress)." buttons {"Cancel","Repair"} default button "Repair" with title "TarzanIQ" with icon caution' 2>/dev/null)
+  case "\$ans" in *Repair*) open -a Terminal "\$APPDIR/install.sh";; esac
+  exit 0
+fi
+
 # --- preferred: native window (pywebview). Runs the engine in-process. ---
 if "\$PYBIN" -c "import webview" >/dev/null 2>&1; then
   cd "\$APPDIR/app" || exit 1
@@ -181,7 +223,7 @@ ICNS=""
 if command -v iconutil >/dev/null 2>&1; then
   ISET="$APPDIR/TarzanIQ.iconset"
   rm -rf "$ISET"; mkdir -p "$ISET"
-  IMG="$HERE/tarzaniq/static/img"
+  IMG="$APPDIR/app/tarzaniq/static/img"    # already copied into place above
   cp "$IMG/icon_16.png"   "$ISET/icon_16x16.png"
   cp "$IMG/icon_32.png"   "$ISET/icon_16x16@2x.png"
   cp "$IMG/icon_32.png"   "$ISET/icon_32x32.png"
@@ -192,7 +234,11 @@ if command -v iconutil >/dev/null 2>&1; then
   cp "$IMG/icon_512.png"  "$ISET/icon_256x256@2x.png"
   cp "$IMG/icon_512.png"  "$ISET/icon_512x512.png"
   cp "$IMG/icon_1024.png" "$ISET/icon_512x512@2x.png"
-  iconutil -c icns "$ISET" -o "$APPDIR/TarzanIQ.icns" 2>/dev/null && ICNS="$APPDIR/TarzanIQ.icns"
+  if iconutil -c icns "$ISET" -o "$APPDIR/TarzanIQ.icns" && [ -s "$APPDIR/TarzanIQ.icns" ]; then
+    ICNS="$APPDIR/TarzanIQ.icns"
+  else
+    warn "Could not build the app icon (iconutil failed) — the app will use a generic icon"
+  fi
   rm -rf "$ISET"
 fi
 
@@ -218,10 +264,25 @@ end open
 OSAEOF
 if osacompile -o "$DROPLET" "$OSA" 2>/dev/null; then
   if [ -n "$ICNS" ]; then
-    for nm in droplet.icns applet.icns; do
-      [ -f "$DROPLET/Contents/Resources/$nm" ] && cp "$ICNS" "$DROPLET/Contents/Resources/$nm"
-    done
+    # Modern osacompile ships its generic icon in an asset catalog
+    # (Assets.car) that macOS prefers over any .icns we drop in — remove it
+    # and the CFBundleIconName key so CFBundleIconFile -> applet.icns (ours)
+    # actually wins. Then re-sign: editing the bundle breaks its seal.
+    cp "$ICNS" "$DROPLET/Contents/Resources/applet.icns"
+    cp "$ICNS" "$DROPLET/Contents/Resources/droplet.icns" 2>/dev/null || true
+    rm -f "$DROPLET/Contents/Resources/Assets.car"
+    /usr/libexec/PlistBuddy -c "Delete :CFBundleIconName" \
+      "$DROPLET/Contents/Info.plist" 2>/dev/null || true
+    /usr/libexec/PlistBuddy -c "Set :CFBundleIconFile applet" \
+      "$DROPLET/Contents/Info.plist" 2>/dev/null \
+      || /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string applet" \
+           "$DROPLET/Contents/Info.plist" 2>/dev/null || true
+    codesign --force --sign - "$DROPLET" >/dev/null 2>&1 \
+      || warn "Could not re-sign the app after icon change (it may still open fine)"
     touch "$DROPLET"
+    # nudge Finder/Dock to pick up the new icon
+    /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
+      -f "$DROPLET" >/dev/null 2>&1 || true
   fi
   say "App created: $DROPLET"
 else
@@ -323,6 +384,15 @@ cat > "$WF/Contents/document.wflow" << 'WFEOF'
 WFEOF
 /System/Library/CoreServices/pbs -flush 2>/dev/null || true
 say "Right-click action installed (may need a Finder relaunch or logout to appear)"
+
+# ---------------------------------------------------------------- self-copy
+# Keep a copy of this installer next to the app so the launcher's "Repair"
+# button can re-run it even after the downloaded folder is deleted.
+if [ -n "$SRC" ] && [ "$HERE" != "$APPDIR" ]; then
+  cp "$HERE/$(basename "$0")" "$APPDIR/install.sh" 2>/dev/null \
+    || cp "$0" "$APPDIR/install.sh" 2>/dev/null || true
+fi
+chmod +x "$APPDIR/install.sh" 2>/dev/null || true
 
 # ---------------------------------------------------------------- finish
 echo

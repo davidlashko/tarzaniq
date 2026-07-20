@@ -1,5 +1,5 @@
 # ── TarzanIQ .gitignore ─────────────────────────────────────────────────────
-# This repo is PUBLIC. Code only — no photos, no biometric data, no models,
+# This repo is PRIVATE (but keep the hygiene). Code only — no photos, no biometric data, no models,
 # no databases, no exports. The data dir lives outside the repo
 # (~/Documents/TarzanIQ Data, override $TARZANIQ_DATA) and must never be committed.
 

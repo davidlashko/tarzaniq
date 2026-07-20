@@ -1,4 +1,4 @@
-opencv-python>=4.11
+opencv-python>=4.11,<5   # 5.x is brand-new; stay on the tested 4.x line
 numpy>=2.0
 flask>=3.1
 openpyxl>=3.1
