@@ -90,9 +90,16 @@ if [ -z "$PY" ]; then
   echo "$PKG_SHA  /tmp/tarzaniq-python.pkg" | shasum -a 256 -c - >/dev/null 2>&1 \
     || { rm -f /tmp/tarzaniq-python.pkg; die "Python download didn't verify — run me again."; }
   say "macOS will now ask for your password (installing official Python system-wide)…"
-  sudo installer -pkg /tmp/tarzaniq-python.pkg -target / \
-    || die "Python install needs an admin password. Run me again and enter it when asked."
-  rm -f /tmp/tarzaniq-python.pkg
+  if sudo installer -pkg /tmp/tarzaniq-python.pkg -target /; then
+    rm -f /tmp/tarzaniq-python.pkg
+  else
+    # sudo can fail (non-admin account, odd Terminal setups). Hand the same
+    # verified pkg to Apple's normal point-and-click installer instead.
+    warn "Couldn't install from Terminal — opening Apple's installer window instead."
+    say  "Click through it (Continue → Install), and when it finishes run me again."
+    open /tmp/tarzaniq-python.pkg
+    exit 1
+  fi
   PY="$(pick_python || true)"
   [ -n "$PY" ] || die "Python still not found after install — install Python 3.12 from python.org manually, then run me again."
 fi
